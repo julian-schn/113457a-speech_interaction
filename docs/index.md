@@ -1,9 +1,6 @@
-# Hello World 23
+# 113457a Speech Interaction
 
-Welcome to your VitePress documentation site!
+Lecture notes, documentation, code archive for Speech Interaction
 
-## Getting Started
-
-This is your home page. You can edit this file to customize your documentation.
-
-[Get started with the guide →](./first_doc.md)
+## Resources
+- Lecture notes on [MI pages](https://heisler.pages.mi.hdm-stuttgart.de/si/intro.html)

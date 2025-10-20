@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'Hello World 23',
-  description: 'Documentation site',
+  title: '113457a Speech Interaction',
+  description: 'Documentation and notes for 113457a Speech Interaction',
   base: '/113457a-speech_interaction/',
   
   themeConfig: {
@@ -19,6 +19,10 @@ export default defineConfig({
         ]
       }
     ],
+
+    search: {
+      provider: 'local'
+    },
 
     socialLinks: [
       { icon: 'github', link: 'https://github.com/julian-schn/113457a-speech_interaction' }
