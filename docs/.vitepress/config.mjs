@@ -21,10 +21,6 @@ export default defineConfig(
           {
             text: 'Notes',
             link: 'https://heisler.pages.mi.hdm-stuttgart.de/si/intro.html'
-          },
-          {
-            text: 'Repo',
-            link: 'https://github.com/julian-schn/113457a-speech_interaction'
           }
         ],
 
