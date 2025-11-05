@@ -15,6 +15,7 @@
 python3 -m venv venv
 ```
 - `venv` at the end is the folder name; change it if you prefer (`.venv`, `env`, etc.).
+- You can place the environment anywhere—just activate from its path—but keeping it beside your project makes onboarding simple.
 - On Windows PowerShell, the command is the same if `python` maps to Python 3: `python -m venv venv`.
 
 ## 2. Activate It
