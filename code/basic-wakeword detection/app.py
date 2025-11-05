@@ -128,6 +128,17 @@ if param:
 owwModel = Model(**model_kwargs)
 n_models = len(getattr(owwModel, "models", {}).keys()) or 1  # fallback for future API changes
 
+# ---------- Debounce config ----------
+DETECTION_THRESHOLD = 0.5        # what you already implicitly use
+DEBOUNCE_SECONDS = 0.7           # ignore repeat triggers for ~0.7 s
+
+# How many frames is that at your CHUNK size?
+frames_per_second = TARGET_RATE / CHUNK  # e.g. 16000 / 1280 = 12.5
+DEBOUNCE_FRAMES = max(1, int(DEBOUNCE_SECONDS * frames_per_second))
+
+# Track cooldown (in frames) per model
+cooldown_frames = {}  # {model_name: remaining_frames}
+
 # ---------- Loop ----------
 if __name__ == "__main__":
     print("\n\n" + "#" * 100)
@@ -154,12 +165,12 @@ if __name__ == "__main__":
                 print(f"[OWW warning] predict() failed: {e}. Continuing...")
                 continue
 
-            # Pretty print scores
+                        # Pretty print scores
             n_spaces = 16
             output_string_header = (
                 "\n"
                 "            Model Name         | Score | Wakeword Status\n"
-                "            --------------------------------------\n"
+                "            --------------------------------------------\n"
             )
 
             # Use prediction_buffer if available; otherwise show last score
@@ -172,8 +183,33 @@ if __name__ == "__main__":
                 scores = list(buf)
                 last = float(scores[-1]) if scores else float(prediction)
                 curr = f"{last:.5f}"
-                status = "--" + " " * 20 if last <= 0.5 else "Wakeword Detected!"
-                output_string_header += f"{mdl}{' '*(n_spaces - len(mdl))}   | {curr} | {status}\n"
+
+                # Ensure we have a cooldown counter for this model
+                if mdl not in cooldown_frames:
+                    cooldown_frames[mdl] = 0
+
+                triggered_this_frame = False
+
+                if cooldown_frames[mdl] > 0:
+                    # Still in cooldown – decrement and don't trigger
+                    cooldown_frames[mdl] -= 1
+                    status = "cooldown..."
+                else:
+                    # Not in cooldown: only trigger on crossing threshold now
+                    if last > DETECTION_THRESHOLD:
+                        triggered_this_frame = True
+                        cooldown_frames[mdl] = DEBOUNCE_FRAMES
+                        status = "Wakeword TRIGGERED!"
+                    else:
+                        status = "--"
+
+                # If you want to run code once per detection, do it here
+                if triggered_this_frame:
+                    print(f"\n[TRIGGER] Wakeword '{mdl}' detected once.")
+
+                output_string_header += (
+                    f"{mdl}{' ' * (n_spaces - len(mdl))}   | {curr} | {status}\n"
+                )
 
             # Print results table in-place
             print("\033[F" * (4 * n_models + 1), end="")
