@@ -34,6 +34,8 @@ Optional flags:
 
 - `--chunk_size`: audio frame size in samples (defaults to `1280`)
 - `--inference_framework`: backend to use (defaults to `onnx`)
+- `--capture_seconds`: seconds of audio to save after each trigger (set `0` to disable)
+- `--output_dir`: where captured `.wav` snippets are stored (defaults to `recordings/`)
 
 When a wakeword is detected, the script prints a debounce-protected line such as:
 
@@ -41,4 +43,10 @@ When a wakeword is detected, the script prints a debounce-protected line such as
 [TRIGGER] Wakeword 'hey_mycroft_v0.1' detected (score=0.812)
 ```
 
-Use this hook to integrate downstream actions or to experiment with other wakeword models.
+If `--capture_seconds` is non-zero, the script buffers audio after each trigger and writes it to `output_dir` once the duration elapses:
+
+```
+[CAPTURE] Saved 2.00s of audio to recordings/20251110-130000_hey_mycroft_v0.1.wav
+```
+
+Use these hooks to integrate downstream actions, collect training data, or experiment with other wakeword models.

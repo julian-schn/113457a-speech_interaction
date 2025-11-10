@@ -1,5 +1,7 @@
 import argparse
 import inspect
+import wave
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +30,20 @@ parser.add_argument(
     help="Inference backend to use (try 'onnx' on Raspberry Pi; 'tflite' if you have tflite_runtime)",
     type=str,
     default="onnx",
+    required=False,
+)
+parser.add_argument(
+    "--capture_seconds",
+    help="How long after a trigger to keep recording audio before saving (0 disables saving)",
+    type=float,
+    default=2.0,
+    required=False,
+)
+parser.add_argument(
+    "--output_dir",
+    help="Directory to store captured wav files",
+    type=str,
+    default="recordings",
     required=False,
 )
 args = parser.parse_args()
@@ -155,6 +171,19 @@ DEBOUNCE_FRAMES = max(1, int(DEBOUNCE_SECONDS * frames_per_second))
 # Track cooldown (in frames) for the active model only
 cooldown_remaining = 0
 
+# Recording / capture configuration
+CAPTURE_SECONDS = max(0.0, float(args.capture_seconds))
+CAPTURE_SAMPLES_TARGET = int(CAPTURE_SECONDS * TARGET_RATE)
+OUTPUT_DIR = Path(args.output_dir).expanduser()
+capture_enabled = CAPTURE_SAMPLES_TARGET > 0
+if capture_enabled:
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+recording_active = False
+record_buffer = bytearray()
+record_samples = 0
+record_label: Optional[str] = None
+record_started_at: Optional[datetime] = None
+
 # ---------- Loop ----------
 def resolve_prediction_key(model, preferred_name: Optional[str]) -> Optional[str]:
     """Pick a single prediction buffer key, optionally matching the preferred name."""
@@ -200,6 +229,20 @@ def extract_score(model, prediction, key: Optional[str]):
         return None
 
 
+def sanitize_label(label: str) -> str:
+    cleaned = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label)
+    cleaned = cleaned.strip("_")
+    return cleaned or "wakeword"
+
+
+def write_wav(samples: bytes, sample_rate: int, dest: Path):
+    with wave.open(str(dest), "wb") as wf:
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(pa.get_sample_size(FORMAT))
+        wf.setframerate(sample_rate)
+        wf.writeframes(samples)
+
+
 if __name__ == "__main__":
     preferred_label = Path(args.model_path).stem if args.model_path else None
     print("#" * 60)
@@ -223,6 +266,8 @@ if __name__ == "__main__":
             frame = np.frombuffer(raw, dtype=np.int16)
             if stream_rate != TARGET_RATE:
                 frame = to_16k(frame, stream_rate)
+            frame_bytes = frame.tobytes()
+            samples_in_frame = len(frame)
 
             # Inference with safety net
             try:
@@ -241,11 +286,40 @@ if __name__ == "__main__":
 
             if cooldown_remaining > 0:
                 cooldown_remaining -= 1
-                continue
+                pass
 
-            if score > DETECTION_THRESHOLD:
+            triggered_this_frame = False
+
+            if score > DETECTION_THRESHOLD and cooldown_remaining == 0:
                 cooldown_remaining = DEBOUNCE_FRAMES
+                triggered_this_frame = True
                 print(f"[TRIGGER] Wakeword '{model_label}' detected (score={score:.3f})")
+
+            if triggered_this_frame and capture_enabled and not recording_active:
+                record_buffer = bytearray(frame_bytes)
+                record_samples = samples_in_frame
+                record_label = model_label
+                record_started_at = datetime.now()
+                recording_active = True
+            elif capture_enabled and recording_active:
+                record_buffer.extend(frame_bytes)
+                record_samples += samples_in_frame
+
+            if capture_enabled and recording_active and record_samples >= CAPTURE_SAMPLES_TARGET:
+                timestamp = (record_started_at or datetime.now()).strftime("%Y%m%d-%H%M%S")
+                safe_label = sanitize_label(record_label or model_label)
+                dest = OUTPUT_DIR / f"{timestamp}_{safe_label}.wav"
+                try:
+                    write_wav(bytes(record_buffer), TARGET_RATE, dest)
+                    print(f"[CAPTURE] Saved {CAPTURE_SECONDS:.2f}s of audio to {dest}")
+                except Exception as e:
+                    print(f"[CAPTURE warning] Failed to write {dest}: {e}")
+                finally:
+                    recording_active = False
+                    record_buffer = bytearray()
+                    record_samples = 0
+                    record_label = None
+                    record_started_at = None
 
     except KeyboardInterrupt:
         print("\nExiting...")

@@ -26,3 +26,6 @@ Thumbs.db
 
 # Optional: coverage output
 coverage/
+
+# Wakeword recordings
+code/basic-wakeword detection/recordings/
