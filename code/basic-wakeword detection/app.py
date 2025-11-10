@@ -1,5 +1,8 @@
 import argparse
 import inspect
+from pathlib import Path
+from typing import Optional
+
 import numpy as np
 import pyaudio
 from openwakeword.model import Model
@@ -48,6 +51,7 @@ CHUNK = args.chunk_size  # in frames at the stream rate
 
 pa = pyaudio.PyAudio()
 
+
 def list_input_devices(p):
     """Return list of (index, info) for input-capable devices."""
     out = []
@@ -56,6 +60,7 @@ def list_input_devices(p):
         if int(info.get("maxInputChannels", 0)) > 0:
             out.append((i, info))
     return out
+
 
 def pick_input_device(p):
     """Prefer a USB mic if present; else first input device."""
@@ -126,7 +131,6 @@ if param:
 # else: installed Model has no explicit backend kwarg; it will choose its default internally.
 
 owwModel = Model(**model_kwargs)
-n_models = len(getattr(owwModel, "models", {}).keys()) or 1  # fallback for future API changes
 
 # ---------- Debounce config ----------
 DETECTION_THRESHOLD = 0.5        # what you already implicitly use
@@ -136,14 +140,64 @@ DEBOUNCE_SECONDS = 0.7           # ignore repeat triggers for ~0.7 s
 frames_per_second = TARGET_RATE / CHUNK  # e.g. 16000 / 1280 = 12.5
 DEBOUNCE_FRAMES = max(1, int(DEBOUNCE_SECONDS * frames_per_second))
 
-# Track cooldown (in frames) per model
-cooldown_frames = {}  # {model_name: remaining_frames}
+# Track cooldown (in frames) for the active model only
+cooldown_remaining = 0
 
 # ---------- Loop ----------
+def resolve_prediction_key(model, preferred_name: Optional[str]) -> Optional[str]:
+    """Pick a single prediction buffer key, optionally matching the preferred name."""
+    buffer_keys = []
+    if hasattr(model, "prediction_buffer"):
+        buffer_keys = list(getattr(model, "prediction_buffer", {}).keys())
+    if not buffer_keys:
+        return None
+    if preferred_name:
+        preferred_lower = preferred_name.lower()
+        for key in buffer_keys:
+            if preferred_lower in key.lower():
+                return key
+    return buffer_keys[0]
+
+
+def format_model_label(source: Optional[str], fallback: str) -> str:
+    if not source:
+        return fallback
+    try:
+        return Path(source).stem or fallback
+    except (TypeError, ValueError):
+        return str(source)
+
+
+def extract_score(model, prediction, key: Optional[str]):
+    """Return the latest score for the selected model."""
+    if key and hasattr(model, "prediction_buffer"):
+        buf = getattr(model, "prediction_buffer", {}).get(key)
+        if buf:
+            try:
+                return float(list(buf)[-1])
+            except (TypeError, ValueError):
+                pass
+    if isinstance(prediction, dict):
+        if key and key in prediction:
+            return float(prediction[key])
+        if len(prediction) == 1:
+            return float(next(iter(prediction.values())))
+    try:
+        return float(prediction)
+    except (TypeError, ValueError):
+        return None
+
+
 if __name__ == "__main__":
-    print("\n\n" + "#" * 100)
-    print("Listening for wakewords...")
-    print("#" * 100 + "\n" * (n_models * 3))
+    preferred_label = Path(args.model_path).stem if args.model_path else None
+    print("#" * 60)
+    print("Listening for a single wakeword...")
+    if preferred_label:
+        print(f"Preferred model: {preferred_label}")
+    print("#" * 60)
+
+    prediction_key = None
+    model_label = preferred_label or "wakeword"
 
     try:
         while True:
@@ -165,55 +219,21 @@ if __name__ == "__main__":
                 print(f"[OWW warning] predict() failed: {e}. Continuing...")
                 continue
 
-                        # Pretty print scores
-            n_spaces = 16
-            output_string_header = (
-                "\n"
-                "            Model Name         | Score | Wakeword Status\n"
-                "            --------------------------------------------\n"
-            )
+            if prediction_key is None:
+                prediction_key = resolve_prediction_key(owwModel, preferred_label)
+                model_label = format_model_label(prediction_key, model_label)
 
-            # Use prediction_buffer if available; otherwise show last score
-            if hasattr(owwModel, "prediction_buffer") and owwModel.prediction_buffer:
-                source = owwModel.prediction_buffer.items()
-            else:
-                source = [(getattr(owwModel, "model_name", "wakeword"), [float(prediction)])]
+            score = extract_score(owwModel, prediction, prediction_key)
+            if score is None:
+                continue
 
-            for mdl, buf in source:
-                scores = list(buf)
-                last = float(scores[-1]) if scores else float(prediction)
-                curr = f"{last:.5f}"
+            if cooldown_remaining > 0:
+                cooldown_remaining -= 1
+                continue
 
-                # Ensure we have a cooldown counter for this model
-                if mdl not in cooldown_frames:
-                    cooldown_frames[mdl] = 0
-
-                triggered_this_frame = False
-
-                if cooldown_frames[mdl] > 0:
-                    # Still in cooldown – decrement and don't trigger
-                    cooldown_frames[mdl] -= 1
-                    status = "cooldown..."
-                else:
-                    # Not in cooldown: only trigger on crossing threshold now
-                    if last > DETECTION_THRESHOLD:
-                        triggered_this_frame = True
-                        cooldown_frames[mdl] = DEBOUNCE_FRAMES
-                        status = "Wakeword TRIGGERED!"
-                    else:
-                        status = "--"
-
-                # If you want to run code once per detection, do it here
-                if triggered_this_frame:
-                    print(f"\n[TRIGGER] Wakeword '{mdl}' detected once.")
-
-                output_string_header += (
-                    f"{mdl}{' ' * (n_spaces - len(mdl))}   | {curr} | {status}\n"
-                )
-
-            # Print results table in-place
-            print("\033[F" * (4 * n_models + 1), end="")
-            print(output_string_header, "                             ", end="\r")
+            if score > DETECTION_THRESHOLD:
+                cooldown_remaining = DEBOUNCE_FRAMES
+                print(f"[TRIGGER] Wakeword '{model_label}' detected (score={score:.3f})")
 
     except KeyboardInterrupt:
         print("\nExiting...")
