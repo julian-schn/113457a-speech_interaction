@@ -44,7 +44,7 @@ export default defineConfig(
       collapsed: false,           // show groups expanded by default
       collapseDepth: 2,           // how deep auto groups can collapse
       capitalizeFirst: true,      // prettify file/folder names
-      hyphenToSpace: true,        // turn "my-file" into "my file"
+      hyphenToSpace: false,       // keep hyphens in generated titles
       underscoreToSpace: true,
 
       // Examples of useful filters you can uncomment/add:
