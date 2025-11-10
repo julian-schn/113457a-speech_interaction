@@ -120,7 +120,19 @@ def first_supported_param(func, candidates):
 
 model_kwargs = {}
 if args.model_path:
-    model_kwargs["wakeword_models"] = [args.model_path]
+    path_param = first_supported_param(
+        Model.__init__,
+        (
+            "wakeword_model_paths",
+            "wakeword_models",
+            "wakeword_model_path",
+            "wakeword_models_paths",
+        ),
+    )
+    if path_param:
+        model_kwargs[path_param] = [args.model_path]
+    else:
+        print("Model path supplied but this Model() signature has no wakeword path parameter.")
 
 param = first_supported_param(
     Model.__init__,
