@@ -7,6 +7,7 @@ from typing import Optional
 
 import numpy as np
 import pyaudio
+import requests
 from openwakeword.model import Model
 
 # ---------- Args ----------
@@ -44,6 +45,20 @@ parser.add_argument(
     help="Directory to store captured wav files",
     type=str,
     default="recordings",
+    required=False,
+)
+parser.add_argument(
+    "--transcribe_url",
+    help="Whisper.cpp inference endpoint (e.g. http://127.0.0.1:8080/inference). Leave empty to skip transcription.",
+    type=str,
+    default="",
+    required=False,
+)
+parser.add_argument(
+    "--transcribe_timeout",
+    help="Seconds to wait for Whisper.cpp transcription responses",
+    type=float,
+    default=30.0,
     required=False,
 )
 args = parser.parse_args()
@@ -184,6 +199,10 @@ record_samples = 0
 record_label: Optional[str] = None
 record_started_at: Optional[datetime] = None
 
+TRANSCRIBE_URL = args.transcribe_url.strip()
+TRANSCRIBE_TIMEOUT = max(0.1, float(args.transcribe_timeout))
+transcription_enabled = bool(TRANSCRIBE_URL)
+
 # ---------- Loop ----------
 def resolve_prediction_key(model, preferred_name: Optional[str]) -> Optional[str]:
     """Pick a single prediction buffer key, optionally matching the preferred name."""
@@ -241,6 +260,50 @@ def write_wav(samples: bytes, sample_rate: int, dest: Path):
         wf.setsampwidth(pa.get_sample_size(FORMAT))
         wf.setframerate(sample_rate)
         wf.writeframes(samples)
+
+
+def request_transcription(file_path: Path) -> Optional[str]:
+    """Send the captured wav to whisper.cpp and return the transcription."""
+    if not transcription_enabled:
+        return None
+    try:
+        with file_path.open("rb") as fh:
+            files = {"file": (file_path.name, fh, "audio/wav")}
+            data = {"response_format": "json"}
+            resp = requests.post(
+                TRANSCRIBE_URL,
+                files=files,
+                data=data,
+                timeout=TRANSCRIBE_TIMEOUT,
+            )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        print(f"[TRANSCRIBE warning] HTTP error from Whisper server: {e}")
+        return None
+
+    text_payload = None
+    try:
+        payload = resp.json()
+        if isinstance(payload, dict):
+            text_payload = payload.get("text") or payload.get("transcription")
+            if not text_payload:
+                segments = payload.get("segments")
+                if isinstance(segments, list):
+                    joined = " ".join(
+                        str(seg.get("text", "")).strip()
+                        for seg in segments
+                        if isinstance(seg, dict)
+                    ).strip()
+                    if joined:
+                        text_payload = joined
+        else:
+            text_payload = resp.text.strip()
+    except ValueError:
+        text_payload = resp.text.strip()
+
+    if text_payload:
+        return str(text_payload).strip()
+    return None
 
 
 if __name__ == "__main__":
@@ -312,8 +375,11 @@ if __name__ == "__main__":
                 try:
                     write_wav(bytes(record_buffer), TARGET_RATE, dest)
                     print(f"[CAPTURE] Saved {CAPTURE_SECONDS:.2f}s of audio to {dest}")
+                    transcription = request_transcription(dest)
+                    if transcription:
+                        print(f"[TRANSCRIBE] {transcription}")
                 except Exception as e:
-                    print(f"[CAPTURE warning] Failed to write {dest}: {e}")
+                    print(f"[CAPTURE warning] Failed to process {dest}: {e}")
                 finally:
                     recording_active = False
                     record_buffer = bytearray()
