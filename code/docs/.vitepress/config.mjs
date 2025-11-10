@@ -20,7 +20,13 @@ export default defineConfig(
           { text: 'Assignment', link: '/assignment' },
           {
             text: 'Notes',
-            link: 'https://heisler.pages.mi.hdm-stuttgart.de/si/intro.html'
+            items: [
+              {
+                text: 'Lecture Slides',
+                link: 'https://heisler.pages.mi.hdm-stuttgart.de/si/intro.html'
+              },
+              { text: 'Project Notes Archive', link: '/notes-archive/' }
+            ]
           },
           {
             text: 'Repo',
