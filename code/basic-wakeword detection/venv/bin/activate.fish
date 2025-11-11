@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV '/Users/julian/Documents/Hochschule/Semester 6/113457a-speech_interaction/code/basic-wakeword detection/venv'
+set -gx VIRTUAL_ENV '/home/admin/Dokumente/113457a-speech_interaction/code/basic-wakeword detection/venv'
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"bin $PATH

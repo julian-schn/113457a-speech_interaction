@@ -1,5 +1,5 @@
 #!/bin/sh
-'''exec' "/Users/julian/Documents/Hochschule/Semester 6/113457a-speech_interaction/code/basic-wakeword detection/venv/bin/python3.14" "$0" "$@"
+'''exec' "/home/admin/Dokumente/113457a-speech_interaction/code/basic-wakeword detection/venv/bin/python3" "$0" "$@"
 ' '''
 import sys
 from numpy.f2py.f2py2e import main

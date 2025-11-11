@@ -9,7 +9,7 @@ alias deactivate 'test $?_OLD_VIRTUAL_PATH != 0 && setenv PATH "$_OLD_VIRTUAL_PA
 # Unset irrelevant variables.
 deactivate nondestructive
 
-setenv VIRTUAL_ENV '/Users/julian/Documents/Hochschule/Semester 6/113457a-speech_interaction/code/basic-wakeword detection/venv'
+setenv VIRTUAL_ENV '/home/admin/Dokumente/113457a-speech_interaction/code/basic-wakeword detection/venv'
 
 set _OLD_VIRTUAL_PATH="$PATH"
 setenv PATH "$VIRTUAL_ENV/"bin":$PATH"
