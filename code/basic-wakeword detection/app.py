@@ -4,6 +4,7 @@ import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import subprocess
 
 import numpy as np
 import pyaudio
@@ -357,6 +358,8 @@ if __name__ == "__main__":
                 cooldown_remaining = DEBOUNCE_FRAMES
                 triggered_this_frame = True
                 print(f"[TRIGGER] Wakeword '{model_label}' detected (score={score:.3f})")
+                subprocess.run(["aplay", "./start_listening.wav"])
+                
 
             if triggered_this_frame and capture_enabled and not recording_active:
                 record_buffer = bytearray(frame_bytes)
