@@ -178,7 +178,7 @@ owwModel = Model(**model_kwargs)
 
 # ---------- Debounce config ----------
 DETECTION_THRESHOLD = 0.5        # what you already implicitly use
-DEBOUNCE_SECONDS = 0.7           # ignore repeat triggers for ~0.7 s
+DEBOUNCE_SECONDS = 1             # ignore repeat triggers for ~0.7 s
 
 # How many frames is that at your CHUNK size?
 frames_per_second = TARGET_RATE / CHUNK  # e.g. 16000 / 1280 = 12.5
