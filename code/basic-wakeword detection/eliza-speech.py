@@ -328,11 +328,13 @@ if __name__ == "__main__":
     prediction_key = None
     model_label = preferred_label or "wakeword"
 
+    eliza = eliza.Eliza()
+    eliza.load('doctor.txt')
+
+    print(eliza.initial())
+
     try:
         voice = PiperVoice.load("./en_US-lessac-medium.onnx")
-        
-        eliza = eliza.Eliza()
-        eliza.load('doctor.txt')
 
         while True:
             # Read raw mic frames; be tolerant of occasional I/O hiccups
@@ -396,17 +398,24 @@ if __name__ == "__main__":
                 dest = OUTPUT_DIR / f"{timestamp}_{safe_label}.wav"
                 try:
                     write_wav(bytes(record_buffer), TARGET_RATE, dest)
+                    
                     print(f"[CAPTURE] Saved {CAPTURE_SECONDS:.2f}s of audio to {dest}")
+                    
                     transcription = request_transcription(dest)
+                    
                     if transcription:
-                        with wave.open("test.wav", "wb") as wav_file:
-                            voice.synthesize_wav(transcription, wav_file)
+                        said = transcription
+                        response = eliza.respond(said)
+                        if response:
+                            with wave.open("test.wav", "wb") as wav_file:
+                                voice.synthesize_wav(response, wav_file)
                         aplay_cmd = ["aplay"]
                         if args.playback_device:
                             aplay_cmd += ["-D", args.playback_device]
                         aplay_cmd.append("./test.wav")
                         subprocess.run(aplay_cmd)
-                    print(f"[TRANSCRIBE] {transcription}")
+                        print(f"[ELIZA: ] {response}")
+
                 except Exception as e:
                     print(f"[CAPTURE warning] Failed to process {dest}: {e}")
                 finally:
@@ -417,6 +426,7 @@ if __name__ == "__main__":
                     record_started_at = None
 
     except KeyboardInterrupt:
+        print("\n" + eliza.final())
         print("\nExiting...")
     finally:
         try:
