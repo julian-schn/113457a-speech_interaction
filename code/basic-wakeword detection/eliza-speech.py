@@ -1,5 +1,6 @@
 import argparse
 import inspect
+import time
 import wave
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +28,7 @@ parser.add_argument(
     "--model_path",
     help="Path of a specific model to load",
     type=str,
-    default="",
+    default="models/hey_mycroft_v0.1.onnx",
     required=False,
 )
 parser.add_argument(
@@ -38,12 +39,13 @@ parser.add_argument(
     required=False,
 )
 parser.add_argument(
-    "--capture_seconds",
-    help="How long after a trigger to keep recording audio before saving (0 disables saving)",
+    "--vad_threshold",
+    help="Voice activity detection threshold (0 disables VAD-driven capture)",
     type=float,
-    default=2.0,
+    default=0.5,
     required=False,
 )
+
 parser.add_argument(
     "--output_dir",
     help="Directory to store captured wav files",
@@ -55,7 +57,7 @@ parser.add_argument(
     "--transcribe_url",
     help="Whisper.cpp inference endpoint (e.g. http://127.0.0.1:8080/inference). Leave empty to skip transcription.",
     type=str,
-    default="",
+    default="http://127.0.0.1:8080/inference",
     required=False,
 )
 parser.add_argument(
@@ -182,7 +184,11 @@ param = first_supported_param(
 )
 if param:
     model_kwargs[param] = args.inference_framework
-# else: installed Model has no explicit backend kwarg; it will choose its default internally.
+
+vad_param = first_supported_param(Model.__init__, ("vad_threshold",))
+if vad_param:
+    model_kwargs[vad_param] = max(0.0, float(args.vad_threshold))
+# else: installed Model has no explicit backend or vad kwargs; it will choose defaults internally.
 
 owwModel = Model(**model_kwargs)
 
@@ -198,17 +204,17 @@ DEBOUNCE_FRAMES = max(1, int(DEBOUNCE_SECONDS * frames_per_second))
 cooldown_remaining = 0
 
 # Recording / capture configuration
-CAPTURE_SECONDS = max(0.0, float(args.capture_seconds))
-CAPTURE_SAMPLES_TARGET = int(CAPTURE_SECONDS * TARGET_RATE)
-OUTPUT_DIR = Path(args.output_dir).expanduser()
-capture_enabled = CAPTURE_SAMPLES_TARGET > 0
+MIN_RECORDING_DURATION = 1.5  # seconds
+MAX_RECORDING_DURATION = 10.0  # seconds
+OUTPUT_DIR = Path(args.output_dir).expanduser() if args.output_dir else None
+capture_enabled = OUTPUT_DIR is not None
 if capture_enabled:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 recording_active = False
 record_buffer = bytearray()
-record_samples = 0
 record_label: Optional[str] = None
 record_started_at: Optional[datetime] = None
+detection_started_at: Optional[float] = None
 
 TRANSCRIBE_URL = args.transcribe_url.strip()
 TRANSCRIBE_TIMEOUT = max(0.1, float(args.transcribe_timeout))
@@ -317,6 +323,20 @@ def request_transcription(file_path: Path) -> Optional[str]:
     return None
 
 
+def current_vad_score(model) -> float:
+    """Return the max VAD score from recent frames (or default if unavailable)."""
+    vad = getattr(model, "vad", None)
+    if not vad or not hasattr(vad, "prediction_buffer"):
+        return 0.0
+    try:
+        vad_frames = list(vad.prediction_buffer)[-20:]
+        if not vad_frames:
+            return 0.0
+        return float(np.max(vad_frames))
+    except Exception:
+        return 0.0
+
+
 if __name__ == "__main__":
     preferred_label = Path(args.model_path).stem if args.model_path else None
     print("#" * 60)
@@ -345,10 +365,10 @@ if __name__ == "__main__":
                 continue
 
             frame = np.frombuffer(raw, dtype=np.int16)
+
             if stream_rate != TARGET_RATE:
                 frame = to_16k(frame, stream_rate)
             frame_bytes = frame.tobytes()
-            samples_in_frame = len(frame)
 
             # Inference with safety net
             try:
@@ -371,6 +391,7 @@ if __name__ == "__main__":
 
             triggered_this_frame = False
 
+            # Wake word detected
             if score > DETECTION_THRESHOLD and cooldown_remaining == 0:
                 cooldown_remaining = DEBOUNCE_FRAMES
                 triggered_this_frame = True
@@ -384,46 +405,56 @@ if __name__ == "__main__":
 
             if triggered_this_frame and capture_enabled and not recording_active:
                 record_buffer = bytearray(frame_bytes)
-                record_samples = samples_in_frame
                 record_label = model_label
                 record_started_at = datetime.now()
                 recording_active = True
+                detection_started_at = time.perf_counter()
             elif capture_enabled and recording_active:
                 record_buffer.extend(frame_bytes)
-                record_samples += samples_in_frame
 
-            if capture_enabled and recording_active and record_samples >= CAPTURE_SAMPLES_TARGET:
-                timestamp = (record_started_at or datetime.now()).strftime("%Y%m%d-%H%M%S")
-                safe_label = sanitize_label(record_label or model_label)
-                dest = OUTPUT_DIR / f"{timestamp}_{safe_label}.wav"
-                try:
-                    write_wav(bytes(record_buffer), TARGET_RATE, dest)
-                    
-                    print(f"[CAPTURE] Saved {CAPTURE_SECONDS:.2f}s of audio to {dest}")
-                    
-                    transcription = request_transcription(dest)
-                    
-                    if transcription:
-                        said = transcription
-                        response = eliza.respond(said)
-                        if response:
-                            with wave.open("test.wav", "wb") as wav_file:
-                                voice.synthesize_wav(response, wav_file)
-                        aplay_cmd = ["aplay"]
-                        if args.playback_device:
-                            aplay_cmd += ["-D", args.playback_device]
-                        aplay_cmd.append("./test.wav")
-                        subprocess.run(aplay_cmd)
-                        print(f"[ELIZA: ] {response}")
+            if capture_enabled and recording_active:
+                elapsed = (time.perf_counter() - detection_started_at) if detection_started_at else 0.0
+                vad_required = args.vad_threshold > 0
+                vad_score = current_vad_score(owwModel) if vad_required else 0.0
+                vad_pass = vad_score > args.vad_threshold if vad_required else False
+                should_continue = (
+                    elapsed < MIN_RECORDING_DURATION
+                    or (vad_required and elapsed < MAX_RECORDING_DURATION and vad_pass)
+                )
 
-                except Exception as e:
-                    print(f"[CAPTURE warning] Failed to process {dest}: {e}")
-                finally:
-                    recording_active = False
-                    record_buffer = bytearray()
-                    record_samples = 0
-                    record_label = None
-                    record_started_at = None
+                if not should_continue:
+                    timestamp = (record_started_at or datetime.now()).strftime("%Y%m%d-%H%M%S")
+                    safe_label = sanitize_label(record_label or model_label)
+                    dest = OUTPUT_DIR / f"{timestamp}_{safe_label}.wav"
+                    try:
+                        write_wav(bytes(record_buffer), TARGET_RATE, dest)
+
+                        print(f"[CAPTURE] Saved {elapsed:.2f}s of audio to {dest}")
+
+                        transcription = request_transcription(dest)
+
+                        if transcription:
+                            print(f"[TRANSCRIBE] {transcription}")
+                            said = transcription
+                            response = eliza.respond(said)
+                            if response:
+                                with wave.open("test.wav", "wb") as wav_file:
+                                    voice.synthesize_wav(response, wav_file)
+                            aplay_cmd = ["aplay"]
+                            if args.playback_device:
+                                aplay_cmd += ["-D", args.playback_device]
+                            aplay_cmd.append("./test.wav")
+                            subprocess.run(aplay_cmd)
+                            print(f"[ELIZA] {response}")
+
+                    except Exception as e:
+                        print(f"[CAPTURE warning] Failed to process {dest}: {e}")
+                    finally:
+                        recording_active = False
+                        record_buffer = bytearray()
+                        record_label = None
+                        record_started_at = None
+                        detection_started_at = None
 
     except KeyboardInterrupt:
         print("\n" + eliza.final())
