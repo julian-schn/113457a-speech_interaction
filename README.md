@@ -81,6 +81,7 @@ If `--transcribe_url` is set, each saved snippet is sent to the whisper.cpp REST
      --model_path models/hey_mycroft_v0.1.onnx \
      --capture_seconds 2 \
      --transcribe_url http://127.0.0.1:8080/inference
+     --playback_device hw:2,0
    ```
 4. After each trigger, the captured `.wav` is uploaded to the Whisper server via `requests` (multipart `file=` payload) and the returned text is printed.
 

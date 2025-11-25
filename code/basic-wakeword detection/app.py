@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import subprocess
+import wave
+from piper import PiperVoice
 
 import numpy as np
 import pyaudio
@@ -60,6 +62,13 @@ parser.add_argument(
     help="Seconds to wait for Whisper.cpp transcription responses",
     type=float,
     default=30.0,
+    required=False,
+)
+parser.add_argument(
+    "--playback_device",
+    help="ALSA device string for aplay (e.g. 'hw:2,0' or 'plughw:Headphones,0'). Leave empty to use the default device.",
+    type=str,
+    default="",
     required=False,
 )
 args = parser.parse_args()
@@ -319,6 +328,7 @@ if __name__ == "__main__":
     model_label = preferred_label or "wakeword"
 
     try:
+        voice = PiperVoice.load("./en_US-lessac-medium.onnx")
         while True:
             # Read raw mic frames; be tolerant of occasional I/O hiccups
             try:
@@ -358,7 +368,11 @@ if __name__ == "__main__":
                 cooldown_remaining = DEBOUNCE_FRAMES
                 triggered_this_frame = True
                 print(f"[TRIGGER] Wakeword '{model_label}' detected (score={score:.3f})")
-                subprocess.run(["aplay", "./start_listening.wav"])
+                aplay_cmd = ["aplay"]
+                if args.playback_device:
+                    aplay_cmd += ["-D", args.playback_device]
+                aplay_cmd.append("./start_listening.wav")
+                subprocess.run(aplay_cmd)
                 
 
             if triggered_this_frame and capture_enabled and not recording_active:
@@ -380,7 +394,14 @@ if __name__ == "__main__":
                     print(f"[CAPTURE] Saved {CAPTURE_SECONDS:.2f}s of audio to {dest}")
                     transcription = request_transcription(dest)
                     if transcription:
-                        print(f"[TRANSCRIBE] {transcription}")
+                        with wave.open("test.wav", "wb") as wav_file:
+                            voice.synthesize_wav(transcription, wav_file)
+                        aplay_cmd = ["aplay"]
+                        if args.playback_device:
+                            aplay_cmd += ["-D", args.playback_device]
+                        aplay_cmd.append("./test.wav")
+                        subprocess.run(aplay_cmd)
+                    print(f"[TRANSCRIBE] {transcription}")
                 except Exception as e:
                     print(f"[CAPTURE warning] Failed to process {dest}: {e}")
                 finally:
