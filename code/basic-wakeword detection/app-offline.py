@@ -1,18 +1,19 @@
 import argparse
 import inspect
+import subprocess
 import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-import subprocess
-import wave
-from piper import PiperVoice
-import eliza
 
 import numpy as np
 import pyaudio
 import requests
 from openwakeword.model import Model
+
+from piper import PiperVoice
+import eliza
+
 
 # ---------- Args ----------
 parser = argparse.ArgumentParser()
@@ -55,7 +56,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--model_path",
-    help="Path of a specific model to load",
+    help="Path of a specific model to load (e.g., ./model/mycroft.onnx)",
     type=str,
     default="",
     required=False,
@@ -102,6 +103,7 @@ parser.add_argument(
     default="",
     required=False,
 )
+
 args = parser.parse_args()
 
 
@@ -112,9 +114,9 @@ try:
         oww_utils.download_models()
     elif hasattr(oww_utils, "download_assets"):
         oww_utils.download_assets()
-    # else: newer versions may auto-download on first use
 except Exception as e:
     print("Skipping explicit model download:", e)
+
 
 # ---------- Audio helpers ----------
 FORMAT = pyaudio.paInt16
@@ -144,7 +146,7 @@ def pick_input_device(p):
     """Prefer a USB mic if present; else first input device."""
     candidates = list_input_devices(p)
     if not candidates:
-        raise RuntimeError("No input (capture) devices found. Plug in a USB mic and check `arecord -l`.")
+        raise RuntimeError("No input (capture) devices found. Plug in a USB mic and check device settings.")
     for i, info in candidates:
         name = (info.get("name") or "").lower()
         if "usb" in name:
@@ -193,46 +195,32 @@ def init_mic_if_live():
         )
 
 
-# ---------- Build Model kwargs across oww versions ----------
-def first_supported_param(func, candidates):
-    try:
-        params = inspect.signature(func).parameters
-        for c in candidates:
-            if c in params:
-                return c
-    except Exception:
-        pass
-    return None
-
-
+# ---------- Build Model (FIXED: always supports explicit model path) ----------
+# Your previous signature-inspection failed on your installed version.
+# This version uses the canonical kwarg: wakeword_models=[...]
 model_kwargs = {}
-if args.model_path:
-    path_param = first_supported_param(
-        Model.__init__,
-        (
-            "wakeword_model_paths",
-            "wakeword_models",
-            "wakeword_model_path",
-            "wakeword_models_paths",
-        ),
-    )
-    if path_param:
-        model_kwargs[path_param] = [args.model_path]
-    else:
-        print("Model path supplied but this Model() signature has no wakeword path parameter.")
 
-param = first_supported_param(
-    Model.__init__,
-    ("inference_framework", "backend", "inference_backend")
-)
-if param:
-    model_kwargs[param] = args.inference_framework
-# else: installed Model has no explicit backend kwarg; it will choose its default internally.
+# Inference backend (onnx/tflite)
+# Some versions may ignore this; harmless if unsupported.
+model_kwargs["inference_framework"] = args.inference_framework
+
+# Load ONLY the specified model when provided
+if args.model_path:
+    model_kwargs["wakeword_models"] = [args.model_path]
 
 owwModel = Model(**model_kwargs)
 
+# Debug to confirm what is loaded
+try:
+    print("[DEBUG] model_path arg:", args.model_path or "(default models)")
+    print("[DEBUG] prediction_buffer keys:",
+          list(getattr(owwModel, "prediction_buffer", {}).keys()))
+except Exception as e:
+    print("[DEBUG] could not read prediction_buffer keys:", e)
+
+
 # ---------- Debounce config ----------
-DETECTION_THRESHOLD = float(args.threshold)   # use CLI value
+DETECTION_THRESHOLD = float(args.threshold)
 DEBOUNCE_SECONDS = 1
 
 frames_per_second = TARGET_RATE / CHUNK
@@ -423,6 +411,9 @@ def run_offline_negative_eval(neg_dir: Path):
                     owwModel,
                     Path(args.model_path).stem if args.model_path else None
                 )
+                if prediction_key is None:
+                    raise RuntimeError("Could not resolve prediction key (no prediction_buffer keys).")
+                print(f"[DEBUG] using key: {prediction_key}")
 
             score = extract_score(owwModel, prediction, prediction_key)
 
@@ -474,8 +465,8 @@ if __name__ == "__main__":
     try:
         voice = PiperVoice.load("./en_US-lessac-medium.onnx")
 
-        eliza = eliza.Eliza()
-        eliza.load('doctor.txt')
+        el = eliza.Eliza()
+        el.load('doctor.txt')
 
         while True:
             try:
@@ -491,8 +482,9 @@ if __name__ == "__main__":
             samples_in_frame = len(frame)
 
             try:
-                # Live could also be normalized, but leaving unchanged for minimal diff:
-                prediction = owwModel.predict(frame)
+                # FIX: normalize like offline
+                frame_f = frame.astype(np.float32) / 32768.0
+                prediction = owwModel.predict(frame_f)
             except Exception as e:
                 print(f"[OWW warning] predict() failed: {e}. Continuing...")
                 continue
@@ -507,7 +499,6 @@ if __name__ == "__main__":
 
             if cooldown_remaining > 0:
                 cooldown_remaining -= 1
-                pass
 
             triggered_this_frame = False
 
