@@ -29,3 +29,7 @@ coverage/
 
 # Wakeword recordings
 code/basic-wakeword detection/recordings/
+
+# wav datasets
+data/
+
