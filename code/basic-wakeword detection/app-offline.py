@@ -16,6 +16,36 @@ from openwakeword.model import Model
 
 # ---------- Args ----------
 parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    "--mode",
+    type=str,
+    default="live",
+    choices=["live", "offline_neg"],
+    help="Run mode: live mic or offline negative evaluation"
+)
+
+parser.add_argument(
+    "--neg_dir",
+    type=str,
+    default="",
+    help="Directory with negative WAV files (offline_neg mode)"
+)
+
+parser.add_argument(
+    "--threshold",
+    type=float,
+    default=0.5,
+    help="Detection threshold for wakeword score"
+)
+
+parser.add_argument(
+    "--hop_ms",
+    type=float,
+    default=80.0,
+    help="Hop size in ms for offline audio scanning"
+)
+
 parser.add_argument(
     "--chunk_size",
     help="How much audio (in number of samples) to predict on at once (at the device rate)",
@@ -73,6 +103,8 @@ parser.add_argument(
     required=False,
 )
 args = parser.parse_args()
+
+
 
 # ---------- Optional: download model assets across oww versions ----------
 try:
@@ -316,8 +348,89 @@ def request_transcription(file_path: Path) -> Optional[str]:
         return str(text_payload).strip()
     return None
 
+def read_wav_int16_mono(path: Path):
+    with wave.open(str(path), "rb") as wf:
+        sr = wf.getframerate()
+        nch = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        raw = wf.readframes(wf.getnframes())
+
+    if sampwidth != 2:
+        raise ValueError(f"{path} is not 16-bit PCM")
+
+    x = np.frombuffer(raw, dtype=np.int16)
+
+    if nch == 2:
+        x = x.reshape(-1, 2).mean(axis=1).astype(np.int16)
+
+    if sr != TARGET_RATE:
+        x = to_16k(x, sr)
+
+    return x
+
+
+def run_offline_negative_eval(neg_dir: Path):
+    files = sorted(p for p in neg_dir.rglob("*.wav"))
+    if not files:
+        raise RuntimeError(f"No WAV files in {neg_dir}")
+
+    hop_samples = int(TARGET_RATE * args.hop_ms / 1000)
+    chunk_samples = CHUNK
+
+    prediction_key = None
+    cooldown_remaining = 0
+
+    total_seconds = 0.0
+    false_alarms = 0
+
+    for wav in files:
+        audio = read_wav_int16_mono(wav)
+        total_seconds += len(audio) / TARGET_RATE
+
+        i = 0
+        while i + chunk_samples <= len(audio):
+            frame = audio[i:i + chunk_samples]
+            prediction = owwModel.predict(frame)
+
+            if prediction_key is None:
+                prediction_key = resolve_prediction_key(
+                    owwModel,
+                    Path(args.model_path).stem if args.model_path else None
+                )
+
+            score = extract_score(owwModel, prediction, prediction_key)
+
+            if cooldown_remaining > 0:
+                cooldown_remaining -= 1
+
+            if score is not None and score >= DETECTION_THRESHOLD and cooldown_remaining == 0:
+                false_alarms += 1
+                cooldown_remaining = DEBOUNCE_FRAMES
+
+            i += hop_samples
+
+    hours = total_seconds / 3600
+    far = false_alarms / hours if hours > 0 else float("nan")
+
+    print("\n" + "#" * 60)
+    print("OFFLINE NEGATIVE EVALUATION")
+    print(f"Files           : {len(files)}")
+    print(f"Audio duration  : {hours:.2f} h")
+    print(f"False alarms    : {false_alarms}")
+    print(f"FAR             : {far:.6f} FA/h")
+    print(f"Threshold       : {DETECTION_THRESHOLD}")
+    print("#" * 60 + "\n")
+
 
 if __name__ == "__main__":
+
+    if args.mode == "offline_neg":
+        if not args.neg_dir:
+            raise RuntimeError("--neg_dir required for offline_neg mode")
+
+        run_offline_negative_eval(Path(args.neg_dir))
+        raise SystemExit(0)
+
     preferred_label = Path(args.model_path).stem if args.model_path else None
     print("#" * 60)
     print("Listening for a single wakeword...")
