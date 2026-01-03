@@ -105,7 +105,6 @@ parser.add_argument(
 args = parser.parse_args()
 
 
-
 # ---------- Optional: download model assets across oww versions ----------
 try:
     from openwakeword import utils as oww_utils
@@ -123,7 +122,12 @@ CHANNELS = 1
 TARGET_RATE = 16000
 CHUNK = args.chunk_size  # in frames at the stream rate
 
-pa = pyaudio.PyAudio()
+# IMPORTANT: Mic / PyAudio are initialized ONLY in live mode
+pa = None
+mic_stream = None
+stream_rate = TARGET_RATE
+idx = None
+device_rate = None
 
 
 def list_input_devices(p):
@@ -148,6 +152,7 @@ def pick_input_device(p):
     i, info = candidates[0]
     return i, int(info.get("defaultSampleRate") or TARGET_RATE)
 
+
 def to_16k(x: np.ndarray, src_rate: int) -> np.ndarray:
     """Cheap linear resampler to 16 kHz for wakeword use."""
     if src_rate == TARGET_RATE:
@@ -156,30 +161,37 @@ def to_16k(x: np.ndarray, src_rate: int) -> np.ndarray:
     idxs = np.linspace(0, len(x) - 1, int(len(x) * factor), endpoint=True)
     return np.interp(idxs, np.arange(len(x)), x).astype(np.int16)
 
-# ---------- Open mic robustly ----------
-idx, device_rate = pick_input_device(pa)
 
-# Try opening at 16k first (ideal), else fall back to device default rate
-stream_rate = TARGET_RATE
-try:
-    mic_stream = pa.open(
-        format=FORMAT,
-        channels=CHANNELS,
-        rate=stream_rate,
-        input=True,
-        frames_per_buffer=CHUNK,
-        input_device_index=idx,
-    )
-except OSError:
-    stream_rate = device_rate
-    mic_stream = pa.open(
-        format=FORMAT,
-        channels=CHANNELS,
-        rate=stream_rate,
-        input=True,
-        frames_per_buffer=CHUNK,
-        input_device_index=idx,
-    )
+def init_mic_if_live():
+    """Initialize PyAudio + mic stream only for live mode."""
+    global pa, mic_stream, stream_rate, idx, device_rate
+
+    pa = pyaudio.PyAudio()
+
+    idx, device_rate = pick_input_device(pa)
+
+    # Try opening at 16k first (ideal), else fall back to device default rate
+    stream_rate = TARGET_RATE
+    try:
+        mic_stream = pa.open(
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=stream_rate,
+            input=True,
+            frames_per_buffer=CHUNK,
+            input_device_index=idx,
+        )
+    except OSError:
+        stream_rate = device_rate
+        mic_stream = pa.open(
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=stream_rate,
+            input=True,
+            frames_per_buffer=CHUNK,
+            input_device_index=idx,
+        )
+
 
 # ---------- Build Model kwargs across oww versions ----------
 def first_supported_param(func, candidates):
@@ -191,6 +203,7 @@ def first_supported_param(func, candidates):
     except Exception:
         pass
     return None
+
 
 model_kwargs = {}
 if args.model_path:
@@ -219,17 +232,15 @@ if param:
 owwModel = Model(**model_kwargs)
 
 # ---------- Debounce config ----------
-DETECTION_THRESHOLD = 0.5        # what you already implicitly use
-DEBOUNCE_SECONDS = 1             # ignore repeat triggers for ~0.7 s
+DETECTION_THRESHOLD = float(args.threshold)   # use CLI value
+DEBOUNCE_SECONDS = 1
 
-# How many frames is that at your CHUNK size?
-frames_per_second = TARGET_RATE / CHUNK  # e.g. 16000 / 1280 = 12.5
+frames_per_second = TARGET_RATE / CHUNK
 DEBOUNCE_FRAMES = max(1, int(DEBOUNCE_SECONDS * frames_per_second))
 
-# Track cooldown (in frames) for the active model only
 cooldown_remaining = 0
 
-# Recording / capture configuration
+# Recording / capture configuration (live mode)
 CAPTURE_SECONDS = max(0.0, float(args.capture_seconds))
 CAPTURE_SAMPLES_TARGET = int(CAPTURE_SECONDS * TARGET_RATE)
 OUTPUT_DIR = Path(args.output_dir).expanduser()
@@ -246,7 +257,7 @@ TRANSCRIBE_URL = args.transcribe_url.strip()
 TRANSCRIBE_TIMEOUT = max(0.1, float(args.transcribe_timeout))
 transcription_enabled = bool(TRANSCRIBE_URL)
 
-# ---------- Loop ----------
+
 def resolve_prediction_key(model, preferred_name: Optional[str]) -> Optional[str]:
     """Pick a single prediction buffer key, optionally matching the preferred name."""
     buffer_keys = []
@@ -348,6 +359,8 @@ def request_transcription(file_path: Path) -> Optional[str]:
         return str(text_payload).strip()
     return None
 
+
+# ---------- OFFLINE NEG ----------
 def read_wav_int16_mono(path: Path):
     with wave.open(str(path), "rb") as wf:
         sr = wf.getframerate()
@@ -374,23 +387,36 @@ def run_offline_negative_eval(neg_dir: Path):
     if not files:
         raise RuntimeError(f"No WAV files in {neg_dir}")
 
-    hop_samples = int(TARGET_RATE * args.hop_ms / 1000)
+    hop_samples = max(1, int(TARGET_RATE * args.hop_ms / 1000))
     chunk_samples = CHUNK
 
     prediction_key = None
-    cooldown_remaining = 0
+
+    # Optional warmup (helps first-call latency)
+    try:
+        _ = owwModel.predict(np.zeros(CHUNK, dtype=np.float32))
+    except Exception:
+        pass
 
     total_seconds = 0.0
     false_alarms = 0
 
-    for wav in files:
+    for idx_f, wav in enumerate(files, start=1):
+        if idx_f == 1 or idx_f % 10 == 0:
+            print(f"[OFFLINE_NEG] file {idx_f}/{len(files)}: {wav.name}")
+
         audio = read_wav_int16_mono(wav)
         total_seconds += len(audio) / TARGET_RATE
 
+        cooldown_remaining_local = 0
         i = 0
         while i + chunk_samples <= len(audio):
             frame = audio[i:i + chunk_samples]
-            prediction = owwModel.predict(frame)
+
+            # IMPORTANT: openwakeword expects float32 audio in [-1, 1]
+            frame_f = frame.astype(np.float32) / 32768.0
+
+            prediction = owwModel.predict(frame_f)
 
             if prediction_key is None:
                 prediction_key = resolve_prediction_key(
@@ -400,12 +426,12 @@ def run_offline_negative_eval(neg_dir: Path):
 
             score = extract_score(owwModel, prediction, prediction_key)
 
-            if cooldown_remaining > 0:
-                cooldown_remaining -= 1
+            if cooldown_remaining_local > 0:
+                cooldown_remaining_local -= 1
 
-            if score is not None and score >= DETECTION_THRESHOLD and cooldown_remaining == 0:
+            if score is not None and score >= DETECTION_THRESHOLD and cooldown_remaining_local == 0:
                 false_alarms += 1
-                cooldown_remaining = DEBOUNCE_FRAMES
+                cooldown_remaining_local = DEBOUNCE_FRAMES
 
             i += hop_samples
 
@@ -419,6 +445,7 @@ def run_offline_negative_eval(neg_dir: Path):
     print(f"False alarms    : {false_alarms}")
     print(f"FAR             : {far:.6f} FA/h")
     print(f"Threshold       : {DETECTION_THRESHOLD}")
+    print(f"hop_ms          : {args.hop_ms}")
     print("#" * 60 + "\n")
 
 
@@ -430,6 +457,9 @@ if __name__ == "__main__":
 
         run_offline_negative_eval(Path(args.neg_dir))
         raise SystemExit(0)
+
+    # Live mode: initialize mic only here
+    init_mic_if_live()
 
     preferred_label = Path(args.model_path).stem if args.model_path else None
     print("#" * 60)
@@ -443,12 +473,11 @@ if __name__ == "__main__":
 
     try:
         voice = PiperVoice.load("./en_US-lessac-medium.onnx")
-        
+
         eliza = eliza.Eliza()
         eliza.load('doctor.txt')
 
         while True:
-            # Read raw mic frames; be tolerant of occasional I/O hiccups
             try:
                 raw = mic_stream.read(CHUNK, exception_on_overflow=False)
             except OSError as e:
@@ -461,8 +490,8 @@ if __name__ == "__main__":
             frame_bytes = frame.tobytes()
             samples_in_frame = len(frame)
 
-            # Inference with safety net
             try:
+                # Live could also be normalized, but leaving unchanged for minimal diff:
                 prediction = owwModel.predict(frame)
             except Exception as e:
                 print(f"[OWW warning] predict() failed: {e}. Continuing...")
@@ -491,7 +520,6 @@ if __name__ == "__main__":
                     aplay_cmd += ["-D", args.playback_device]
                 aplay_cmd.append("./start_listening.wav")
                 subprocess.run(aplay_cmd)
-                
 
             if triggered_this_frame and capture_enabled and not recording_active:
                 record_buffer = bytearray(frame_bytes)
@@ -533,8 +561,13 @@ if __name__ == "__main__":
         print("\nExiting...")
     finally:
         try:
-            mic_stream.stop_stream()
-            mic_stream.close()
+            if mic_stream is not None:
+                mic_stream.stop_stream()
+                mic_stream.close()
         except Exception:
             pass
-        pa.terminate()
+        try:
+            if pa is not None:
+                pa.terminate()
+        except Exception:
+            pass
