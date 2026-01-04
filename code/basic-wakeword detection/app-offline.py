@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
 import numpy as np
-import pyaudio
 import requests
 from openwakeword.model import Model
 
@@ -62,7 +61,6 @@ parser.add_argument(
     help="How many samples to predict on at once",
     type=int,
     default=1280,
-    required=False,
 )
 
 parser.add_argument(
@@ -70,7 +68,6 @@ parser.add_argument(
     help="Path of a specific model to load (e.g., ./models/hey_mycroft.onnx). If empty, loads default models.",
     type=str,
     default="",
-    required=False,
 )
 
 parser.add_argument(
@@ -78,7 +75,6 @@ parser.add_argument(
     help="Inference backend to use (onnx/tflite). Some versions may ignore this.",
     type=str,
     default="onnx",
-    required=False,
 )
 
 parser.add_argument(
@@ -86,7 +82,6 @@ parser.add_argument(
     help="How long after a trigger to keep recording audio before saving (0 disables saving)",
     type=float,
     default=2.0,
-    required=False,
 )
 
 parser.add_argument(
@@ -94,7 +89,6 @@ parser.add_argument(
     help="Directory to store captured wav files",
     type=str,
     default="recordings",
-    required=False,
 )
 
 parser.add_argument(
@@ -102,7 +96,6 @@ parser.add_argument(
     help="Whisper.cpp inference endpoint (e.g. http://127.0.0.1:8080/inference). Leave empty to skip transcription.",
     type=str,
     default="",
-    required=False,
 )
 
 parser.add_argument(
@@ -110,7 +103,6 @@ parser.add_argument(
     help="Seconds to wait for Whisper.cpp transcription responses",
     type=float,
     default=30.0,
-    required=False,
 )
 
 parser.add_argument(
@@ -118,20 +110,18 @@ parser.add_argument(
     help="ALSA device string for aplay (Linux). Leave empty to use default device.",
     type=str,
     default="",
-    required=False,
 )
 
 parser.add_argument(
     "--mic_device",
-    help="PyAudio input device index (Windows: choose Microphone Array etc.). -1 = auto pick.",
+    help="PyAudio input device index. -1 = auto pick.",
     type=int,
     default=-1,
-    required=False,
 )
 
 parser.add_argument(
     "--list_devices",
-    help="Print input devices and exit",
+    help="Print input devices and exit (live mode only)",
     action="store_true",
 )
 
@@ -144,7 +134,13 @@ parser.add_argument(
 parser.add_argument(
     "--print_triggers",
     action="store_true",
-    help="Print trigger timestamps (offline: seconds; live: local time)."
+    help="Offline: collect trigger timestamps across ALL files; Live: print trigger clock time."
+)
+
+parser.add_argument(
+    "--debug_once",
+    action="store_true",
+    help="Print one-time debug info about prediction output (offline + live)."
 )
 
 args = parser.parse_args()
@@ -166,12 +162,13 @@ except Exception as e:
 # ============================================================
 # Audio constants / globals
 # ============================================================
-FORMAT = pyaudio.paInt16
+FORMAT = None          # set in live mode after pyaudio import
 CHANNELS = 1
 TARGET_RATE = 16000
 CHUNK = int(args.chunk_size)
 
-pa: Optional[pyaudio.PyAudio] = None
+pyaudio = None         # lazy import for live mode only
+pa = None
 mic_stream = None
 stream_rate = TARGET_RATE
 device_rate = None
@@ -179,66 +176,10 @@ device_index = None
 
 
 # ============================================================
-# Helpers: devices + resampling
+# Helpers: resampling
 # ============================================================
-def list_input_devices(p: pyaudio.PyAudio) -> List[Tuple[int, Dict[str, Any]]]:
-    out = []
-    for i in range(p.get_device_count()):
-        info = p.get_device_info_by_index(i)
-        if int(info.get("maxInputChannels", 0)) > 0:
-            out.append((i, info))
-    return out
-
-
-def print_input_devices(p: pyaudio.PyAudio) -> None:
-    print("=== INPUT DEVICES ===")
-    for i, info in list_input_devices(p):
-        print(
-            i,
-            info.get("name"),
-            "rate:",
-            info.get("defaultSampleRate"),
-            "ch:",
-            info.get("maxInputChannels"),
-        )
-    print("=====================")
-
-
-def pick_input_device_auto(p: pyaudio.PyAudio) -> Tuple[int, int]:
-    """
-    Windows-safe picker:
-    - avoid soundmapper / generic drivers
-    - prefer actual mics (microphone/mikrofon/array/surface/realtek/usb/headset)
-    """
-    candidates = list_input_devices(p)
-    if not candidates:
-        raise RuntimeError("No input (capture) devices found. Check Windows mic privacy + devices.")
-
-    skip = ("soundmapper", "primärer", "primary", "treiber", "driver", "lautsprecher")
-    prefer = ("microphone", "mikrofon", "mic", "array", "surface", "realtek", "usb", "headset")
-
-    scored = []
-    for idx, info in candidates:
-        name = (info.get("name") or "").lower()
-        if any(s in name for s in skip):
-            continue
-        score = sum(1 for k in prefer if k in name)
-        scored.append((score, idx, info))
-
-    if scored:
-        scored.sort(reverse=True)
-        _, idx, info = scored[0]
-        return idx, int(info.get("defaultSampleRate") or TARGET_RATE)
-
-    idx, info = candidates[0]
-    return idx, int(info.get("defaultSampleRate") or TARGET_RATE)
-
-
 def to_16k_linear_int16(x: np.ndarray, src_rate: int) -> np.ndarray:
-    """
-    Cheap linear resampler to 16 kHz for wakeword use.
-    Input/output: int16 mono.
-    """
+    """Cheap linear resampler to 16 kHz for wakeword use. Input/output: int16 mono."""
     if src_rate == TARGET_RATE:
         return x
     factor = TARGET_RATE / float(src_rate)
@@ -302,15 +243,10 @@ def build_model() -> Model:
 
 
 owwModel = build_model()
-print("[DEBUG] model_path arg:", args.model_path or "(default models)")
-try:
-    print("[DEBUG] prediction_buffer keys (before predict):", list(getattr(owwModel, "prediction_buffer", {}).keys()))
-except Exception:
-    pass
 
 
 # ============================================================
-# Score/key extraction (don’t depend on prediction_buffer)
+# Score/key extraction
 # ============================================================
 def preferred_stem() -> Optional[str]:
     if not args.model_path:
@@ -361,10 +297,7 @@ def format_model_label(key: Optional[str], fallback: str) -> str:
 # Peak-picking trigger
 # ============================================================
 class PeakPicker:
-    """
-    Arms a trigger when score has fallen below release threshold.
-    Fires exactly once per "activation blob" above threshold.
-    """
+    """Fires once per 'activation blob' above threshold, rearms when score < threshold*release_ratio."""
     def __init__(self, threshold: float, release_ratio: float = 0.9):
         self.threshold = float(threshold)
         self.release_ratio = float(release_ratio)
@@ -383,10 +316,63 @@ class PeakPicker:
 
 
 # ============================================================
-# Mic init (live only)
+# Live: devices (lazy pyaudio import)
 # ============================================================
+def list_input_devices(p) -> List[Tuple[int, Dict[str, Any]]]:
+    out = []
+    for i in range(p.get_device_count()):
+        info = p.get_device_info_by_index(i)
+        if int(info.get("maxInputChannels", 0)) > 0:
+            out.append((i, info))
+    return out
+
+
+def print_input_devices(p) -> None:
+    print("=== INPUT DEVICES ===")
+    for i, info in list_input_devices(p):
+        print(
+            i,
+            info.get("name"),
+            "rate:",
+            info.get("defaultSampleRate"),
+            "ch:",
+            info.get("maxInputChannels"),
+        )
+    print("=====================")
+
+
+def pick_input_device_auto(p) -> Tuple[int, int]:
+    candidates = list_input_devices(p)
+    if not candidates:
+        raise RuntimeError("No input devices found. Check mic privacy + devices.")
+
+    skip = ("soundmapper", "primärer", "primary", "treiber", "driver", "lautsprecher")
+    prefer = ("microphone", "mikrofon", "mic", "array", "surface", "realtek", "usb", "headset")
+
+    scored = []
+    for idx_, info in candidates:
+        name = (info.get("name") or "").lower()
+        if any(s in name for s in skip):
+            continue
+        score = sum(1 for k in prefer if k in name)
+        scored.append((score, idx_, info))
+
+    if scored:
+        scored.sort(reverse=True)
+        _, idx_, info = scored[0]
+        return idx_, int(info.get("defaultSampleRate") or TARGET_RATE)
+
+    idx_, info = candidates[0]
+    return idx_, int(info.get("defaultSampleRate") or TARGET_RATE)
+
+
 def init_mic_live() -> None:
-    global pa, mic_stream, stream_rate, device_rate, device_index
+    global pyaudio, pa, mic_stream, stream_rate, device_rate, device_index, FORMAT
+
+    import pyaudio as _pyaudio
+    pyaudio = _pyaudio
+
+    FORMAT = pyaudio.paInt16
     pa = pyaudio.PyAudio()
 
     if args.list_devices:
@@ -492,7 +478,7 @@ def request_transcription(file_path: Path) -> Optional[str]:
 # ============================================================
 # Offline WAV reading (int16 mono @16k)
 # ============================================================
-def read_wav_int16_mono(path: Path) -> Tuple[np.ndarray, float]:
+def read_wav_int16_mono(path: Path) -> np.ndarray:
     with wave.open(str(path), "rb") as wf:
         sr = wf.getframerate()
         nch = wf.getnchannels()
@@ -510,13 +496,12 @@ def read_wav_int16_mono(path: Path) -> Tuple[np.ndarray, float]:
 
     if sr != TARGET_RATE:
         x = to_16k_linear_int16(x, sr)
-        sr = TARGET_RATE
 
-    return x, float(sr)
+    return x
 
 
 # ============================================================
-# Offline runner: Trigger counting + per-file summary
+# Offline runner: ONLY summary at the end
 # ============================================================
 def run_offline_trigger_count(audio_dir: Path) -> None:
     files = sorted(p for p in audio_dir.rglob("*.wav"))
@@ -527,31 +512,22 @@ def run_offline_trigger_count(audio_dir: Path) -> None:
     chunk_samples = CHUNK
 
     preferred = preferred_stem()
-    printed_once = False
 
     total_triggers = 0
     total_seconds = 0.0
     global_max_score = 0.0
 
-    print("\n" + "#" * 60)
-    print("OFFLINE TRIGGER COUNT (Peak-picking)")
-    print(f"Dir            : {audio_dir}")
-    print(f"Files          : {len(files)}")
-    print(f"Threshold      : {args.threshold}")
-    print(f"Release ratio  : {args.release_ratio}  (release={args.threshold * args.release_ratio:.6f})")
-    print(f"hop_ms         : {args.hop_ms}")
-    print(f"chunk_samples  : {CHUNK}")
-    print("#" * 60 + "\n")
+    # Optional: collect ALL trigger timestamps (file-relative seconds) across all files
+    # Format: "filename@12.34s"
+    all_trigger_marks: List[str] = []
 
-    for f_i, wav_path in enumerate(files, start=1):
-        audio, _sr = read_wav_int16_mono(wav_path)
-        duration_s = len(audio) / float(TARGET_RATE)
-        total_seconds += duration_s
+    printed_debug = False
+
+    for wav_path in files:
+        audio = read_wav_int16_mono(wav_path)
+        total_seconds += len(audio) / float(TARGET_RATE)
 
         picker = PeakPicker(args.threshold, args.release_ratio)
-        triggers_file = 0
-        max_score_file = 0.0
-        trigger_times: List[float] = []
 
         i = 0
         last_prediction = None
@@ -565,21 +541,20 @@ def run_offline_trigger_count(audio_dir: Path) -> None:
             score = extract_score(prediction, key)
 
             if score is not None:
-                if score > max_score_file:
-                    max_score_file = score
+                if score > global_max_score:
+                    global_max_score = score
+
                 if picker.step(score):
-                    triggers_file += 1
                     total_triggers += 1
-                    # Timestamp in seconds (approx: window start)
-                    t_s = i / float(TARGET_RATE)
-                    trigger_times.append(t_s)
+                    if args.print_triggers:
+                        t_s = i / float(TARGET_RATE)
+                        all_trigger_marks.append(f"{wav_path.name}@{t_s:.2f}s")
 
             i += hop_samples
 
-        global_max_score = max(global_max_score, max_score_file)
-
-        if not printed_once and last_prediction is not None:
-            printed_once = True
+        if args.debug_once and (not printed_debug) and last_prediction is not None:
+            printed_debug = True
+            print("[DEBUG] model_path arg:", args.model_path or "(default models)")
             print("[DEBUG] type(prediction):", type(last_prediction))
             if isinstance(last_prediction, dict):
                 print("[DEBUG] prediction keys:", list(last_prediction.keys()))
@@ -595,20 +570,30 @@ def run_offline_trigger_count(audio_dir: Path) -> None:
                 pass
             print()
 
-        print(f"[FILE] {f_i:>3}/{len(files)}  {wav_path.name}")
-        print(f"       duration_s     : {duration_s:.2f}")
-        print(f"       max_score      : {max_score_file:.6f}")
-        print(f"       trigger_count  : {triggers_file}")
-        if args.print_triggers and trigger_times:
-            times_str = ", ".join(f"{t:.2f}s" for t in trigger_times)
-            print(f"       trigger_times  : {times_str}")
-        print()
-
-    print("#" * 60)
-    print("SUMMARY")
-    print(f"Total triggers : {total_triggers}")
-    print(f"Total duration : {total_seconds:.2f} s")
+    print("\n" + "#" * 60)
+    print("OFFLINE TRIGGER COUNT (Peak-picking)")
+    print(f"Dir            : {audio_dir}")
+    print(f"Files          : {len(files)}")
+    print(f"Total duration : {total_seconds:.2f} s  ({total_seconds/3600.0:.4f} h)")
+    print(f"Triggers total : {total_triggers}")
+    print(f"Threshold      : {args.threshold}")
+    print(f"Release ratio  : {args.release_ratio}  (release={args.threshold * args.release_ratio:.6f})")
+    print(f"hop_ms         : {args.hop_ms}")
+    print(f"chunk_samples  : {CHUNK}")
     print(f"Global maxscore: {global_max_score:.6f}")
+    if args.print_triggers:
+        print(f"Trigger marks  : {len(all_trigger_marks)}")
+        if all_trigger_marks:
+            # print in one line if small, otherwise wrap a bit
+            joined = ", ".join(all_trigger_marks)
+            if len(joined) <= 800:
+                print("Marks          :", joined)
+            else:
+                print("Marks          :")
+                for m in all_trigger_marks[:200]:
+                    print("  ", m)
+                if len(all_trigger_marks) > 200:
+                    print(f"  ... ({len(all_trigger_marks) - 200} more)")
     print("#" * 60 + "\n")
 
 
@@ -649,6 +634,7 @@ if __name__ == "__main__":
     record_started_at: Optional[datetime] = None
 
     trigger_counter = 0
+    printed_debug_live = False
 
     try:
         voice = PiperVoice.load("./en_US-lessac-medium.onnx")
@@ -673,6 +659,14 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"[OWW warning] predict() failed: {e}. Continuing...")
                 continue
+
+            if args.debug_once and (not printed_debug_live):
+                printed_debug_live = True
+                print("[DEBUG] model_path arg:", args.model_path or "(default models)")
+                print("[DEBUG] type(prediction):", type(prediction))
+                if isinstance(prediction, dict):
+                    print("[DEBUG] prediction keys:", list(prediction.keys()))
+                print()
 
             if prediction_key is None:
                 prediction_key = pick_key_from_prediction(prediction, preferred)
