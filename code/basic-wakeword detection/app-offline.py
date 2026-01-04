@@ -25,15 +25,15 @@ parser.add_argument(
     "--mode",
     type=str,
     default="live",
-    choices=["live", "offline_neg"],
-    help="Run mode: live mic or offline negative evaluation"
+    choices=["live", "offline"],
+    help="Run mode: live mic or offline WAV scanning"
 )
 
 parser.add_argument(
-    "--neg_dir",
+    "--audio_dir",
     type=str,
     default="",
-    help="Directory with WAV files (offline_neg mode). You can also put pos_wavs here for a sanity check."
+    help="Directory with WAV files (offline mode)."
 )
 
 parser.add_argument(
@@ -46,14 +46,14 @@ parser.add_argument(
 parser.add_argument(
     "--release_ratio",
     type=float,
-    default=0.5,
+    default=0.9,
     help="Peak-picking release ratio: next trigger is armed when score < threshold*release_ratio"
 )
 
 parser.add_argument(
     "--hop_ms",
     type=float,
-    default=80.0,
+    default=40.0,
     help="Hop size in ms for offline audio scanning"
 )
 
@@ -67,7 +67,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--model_path",
-    help="Path of a specific model to load (e.g., ./models/hey_mycroft.onnx)",
+    help="Path of a specific model to load (e.g., ./models/hey_mycroft.onnx). If empty, loads default models.",
     type=str,
     default="",
     required=False,
@@ -133,6 +133,18 @@ parser.add_argument(
     "--list_devices",
     help="Print input devices and exit",
     action="store_true",
+)
+
+parser.add_argument(
+    "--play_trigger_sound",
+    action="store_true",
+    help="Play ./start_listening.wav on trigger (works on Windows+Linux)."
+)
+
+parser.add_argument(
+    "--print_triggers",
+    action="store_true",
+    help="Print trigger timestamps (offline: seconds; live: local time)."
 )
 
 args = parser.parse_args()
@@ -239,6 +251,8 @@ def to_16k_linear_int16(x: np.ndarray, src_rate: int) -> np.ndarray:
 # Playback helper (Windows + Linux)
 # ============================================================
 def play_wav(path: str) -> None:
+    if not args.play_trigger_sound:
+        return
     if sys.platform.startswith("win"):
         import winsound
         winsound.PlaySound(path, winsound.SND_FILENAME)
@@ -288,7 +302,6 @@ def build_model() -> Model:
 
 
 owwModel = build_model()
-
 print("[DEBUG] model_path arg:", args.model_path or "(default models)")
 try:
     print("[DEBUG] prediction_buffer keys (before predict):", list(getattr(owwModel, "prediction_buffer", {}).keys()))
@@ -317,7 +330,6 @@ def pick_key_from_prediction(prediction: Any, preferred: Optional[str]) -> Optio
         for k in keys:
             if pl in str(k).lower():
                 return k
-    # nice default if you're testing alexa etc.
     if "alexa" in prediction:
         return "alexa"
     return keys[0]
@@ -346,37 +358,22 @@ def format_model_label(key: Optional[str], fallback: str) -> str:
 
 
 # ============================================================
-# Peak-picking trigger (Solution B)
+# Peak-picking trigger
 # ============================================================
 class PeakPicker:
     """
     Arms a trigger when score has fallen below release threshold.
     Fires exactly once per "activation blob" above threshold.
     """
-    def __init__(self, threshold: float, release_ratio: float = 0.5):
+    def __init__(self, threshold: float, release_ratio: float = 0.9):
         self.threshold = float(threshold)
         self.release_ratio = float(release_ratio)
-        # Clamp release ratio to sane range
         if not (0.01 <= self.release_ratio <= 0.99):
-            self.release_ratio = 0.5
+            self.release_ratio = 0.9
         self.release = self.threshold * self.release_ratio
         self.armed = True
 
-    def update_threshold(self, threshold: float):
-        self.threshold = float(threshold)
-        self.release = self.threshold * self.release_ratio
-
-    def update_release_ratio(self, release_ratio: float):
-        self.release_ratio = float(release_ratio)
-        if not (0.01 <= self.release_ratio <= 0.99):
-            self.release_ratio = 0.5
-        self.release = self.threshold * self.release_ratio
-
     def step(self, score: float) -> bool:
-        """
-        Returns True exactly on a peak crossing event (armed & score>=threshold),
-        then disarms until score drops below release.
-        """
         if self.armed and score >= self.threshold:
             self.armed = False
             return True
@@ -430,7 +427,7 @@ def init_mic_live() -> None:
 
 
 # ============================================================
-# Capture + transcription
+# Capture + transcription (live)
 # ============================================================
 DETECTION_THRESHOLD = float(args.threshold)
 RELEASE_RATIO = float(args.release_ratio)
@@ -495,7 +492,7 @@ def request_transcription(file_path: Path) -> Optional[str]:
 # ============================================================
 # Offline WAV reading (int16 mono @16k)
 # ============================================================
-def read_wav_int16_mono(path: Path) -> np.ndarray:
+def read_wav_int16_mono(path: Path) -> Tuple[np.ndarray, float]:
     with wave.open(str(path), "rb") as wf:
         sr = wf.getframerate()
         nch = wf.getnchannels()
@@ -513,44 +510,54 @@ def read_wav_int16_mono(path: Path) -> np.ndarray:
 
     if sr != TARGET_RATE:
         x = to_16k_linear_int16(x, sr)
+        sr = TARGET_RATE
 
-    return x
+    return x, float(sr)
 
 
 # ============================================================
-# Offline neg runner (now peak-picking, not debounce)
+# Offline runner: Trigger counting + per-file summary
 # ============================================================
-def run_offline_negative_eval(neg_dir: Path) -> None:
-    files = sorted(p for p in neg_dir.rglob("*.wav"))
+def run_offline_trigger_count(audio_dir: Path) -> None:
+    files = sorted(p for p in audio_dir.rglob("*.wav"))
     if not files:
-        raise RuntimeError(f"No WAV files in {neg_dir}")
+        raise RuntimeError(f"No WAV files in {audio_dir}")
 
     hop_samples = max(1, int(TARGET_RATE * float(args.hop_ms) / 1000.0))
     chunk_samples = CHUNK
 
-    total_seconds = 0.0
-    false_alarms = 0
-    global_max_score = 0.0
-
     preferred = preferred_stem()
     printed_once = False
 
+    total_triggers = 0
+    total_seconds = 0.0
+    global_max_score = 0.0
+
+    print("\n" + "#" * 60)
+    print("OFFLINE TRIGGER COUNT (Peak-picking)")
+    print(f"Dir            : {audio_dir}")
+    print(f"Files          : {len(files)}")
+    print(f"Threshold      : {args.threshold}")
+    print(f"Release ratio  : {args.release_ratio}  (release={args.threshold * args.release_ratio:.6f})")
+    print(f"hop_ms         : {args.hop_ms}")
+    print(f"chunk_samples  : {CHUNK}")
+    print("#" * 60 + "\n")
+
     for f_i, wav_path in enumerate(files, start=1):
-        print(f"[OFFLINE_NEG] file {f_i}/{len(files)}: {wav_path.name}")
+        audio, _sr = read_wav_int16_mono(wav_path)
+        duration_s = len(audio) / float(TARGET_RATE)
+        total_seconds += duration_s
 
-        audio = read_wav_int16_mono(wav_path)
-        total_seconds += len(audio) / float(TARGET_RATE)
-
-        picker = PeakPicker(DETECTION_THRESHOLD, RELEASE_RATIO)
-        max_score_file = 0.0
+        picker = PeakPicker(args.threshold, args.release_ratio)
         triggers_file = 0
+        max_score_file = 0.0
+        trigger_times: List[float] = []
 
         i = 0
         last_prediction = None
 
         while i + chunk_samples <= len(audio):
-            frame = audio[i:i + chunk_samples]  # int16 mono @ 16k
-
+            frame = audio[i:i + chunk_samples]
             prediction = owwModel.predict(frame)
             last_prediction = prediction
 
@@ -560,10 +567,12 @@ def run_offline_negative_eval(neg_dir: Path) -> None:
             if score is not None:
                 if score > max_score_file:
                     max_score_file = score
-
                 if picker.step(score):
-                    false_alarms += 1
                     triggers_file += 1
+                    total_triggers += 1
+                    # Timestamp in seconds (approx: window start)
+                    t_s = i / float(TARGET_RATE)
+                    trigger_times.append(t_s)
 
             i += hop_samples
 
@@ -584,22 +593,22 @@ def run_offline_negative_eval(neg_dir: Path) -> None:
                       list(getattr(owwModel, "prediction_buffer", {}).keys()))
             except Exception:
                 pass
+            print()
 
-        print(f"[DEBUG] file_max_score={max_score_file:.6f} triggers_in_file={triggers_file}")
+        print(f"[FILE] {f_i:>3}/{len(files)}  {wav_path.name}")
+        print(f"       duration_s     : {duration_s:.2f}")
+        print(f"       max_score      : {max_score_file:.6f}")
+        print(f"       trigger_count  : {triggers_file}")
+        if args.print_triggers and trigger_times:
+            times_str = ", ".join(f"{t:.2f}s" for t in trigger_times)
+            print(f"       trigger_times  : {times_str}")
+        print()
 
-    hours = total_seconds / 3600.0
-    far = (false_alarms / hours) if hours > 0 else float("nan")
-
-    print("\n" + "#" * 60)
-    print("OFFLINE NEGATIVE EVALUATION (Peak-picking)")
-    print(f"Files           : {len(files)}")
-    print(f"Audio duration  : {hours:.2f} h")
-    print(f"Triggers        : {false_alarms}")
-    print(f"FAR             : {far:.6f} FA/h")
-    print(f"Threshold       : {DETECTION_THRESHOLD}")
-    print(f"Release ratio   : {RELEASE_RATIO}  (release={DETECTION_THRESHOLD * RELEASE_RATIO:.6f})")
-    print(f"hop_ms          : {args.hop_ms}")
-    print(f"Global maxscore : {global_max_score:.6f}")
+    print("#" * 60)
+    print("SUMMARY")
+    print(f"Total triggers : {total_triggers}")
+    print(f"Total duration : {total_seconds:.2f} s")
+    print(f"Global maxscore: {global_max_score:.6f}")
     print("#" * 60 + "\n")
 
 
@@ -609,10 +618,10 @@ def run_offline_negative_eval(neg_dir: Path) -> None:
 if __name__ == "__main__":
 
     # OFFLINE
-    if args.mode == "offline_neg":
-        if not args.neg_dir:
-            raise RuntimeError("--neg_dir required for offline_neg mode")
-        run_offline_negative_eval(Path(args.neg_dir))
+    if args.mode == "offline":
+        if not args.audio_dir:
+            raise RuntimeError("--audio_dir required for offline mode")
+        run_offline_trigger_count(Path(args.audio_dir))
         raise SystemExit(0)
 
     # LIVE
@@ -620,9 +629,11 @@ if __name__ == "__main__":
 
     preferred = preferred_stem()
     print("#" * 60)
-    print("Listening for a single wakeword...")
+    print("Listening for wakeword...")
     if preferred:
         print(f"Preferred model: {preferred}")
+    print(f"Threshold     : {args.threshold}")
+    print(f"Release ratio : {args.release_ratio} (release={args.threshold * args.release_ratio:.6f})")
     print("#" * 60)
 
     prediction_key = None
@@ -636,6 +647,8 @@ if __name__ == "__main__":
     record_samples = 0
     record_label: Optional[str] = None
     record_started_at: Optional[datetime] = None
+
+    trigger_counter = 0
 
     try:
         voice = PiperVoice.load("./en_US-lessac-medium.onnx")
@@ -652,11 +665,9 @@ if __name__ == "__main__":
 
             frame = np.frombuffer(raw, dtype=np.int16)
 
-            # resample if device isn't 16k
             if stream_rate != TARGET_RATE:
                 frame = to_16k_linear_int16(frame, stream_rate)
 
-            # Keep int16 for predict
             try:
                 prediction = owwModel.predict(frame)
             except Exception as e:
@@ -674,7 +685,13 @@ if __name__ == "__main__":
             triggered = picker_live.step(score)
 
             if triggered:
-                print(f"[TRIGGER] Wakeword '{model_label}' detected (score={score:.3f})")
+                trigger_counter += 1
+                if args.print_triggers:
+                    now = datetime.now().strftime("%H:%M:%S")
+                    print(f"[TRIGGER #{trigger_counter}] {now}  '{model_label}' score={score:.3f}")
+                else:
+                    print(f"[TRIGGER] '{model_label}' score={score:.3f}  (count={trigger_counter})")
+
                 play_wav("./start_listening.wav")
 
             # Capture: store PCM16 bytes
