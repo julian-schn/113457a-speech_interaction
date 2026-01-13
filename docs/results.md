@@ -1,4 +1,4 @@
-Results von Mycroft bei 5h negativ Audio mit 10 db random noisefloor + random speech:
+FAR Results von Mycroft bei 5h negativ Audio mit 10 db random noisefloor + random speech:
 
 
 ############################################################
@@ -14,8 +14,6 @@ chunk_samples  : 1280
 Global maxscore: 0.806666
 ############################################################
 
-WARNING:root:Tried to import the tflite runtime, but it was not found. Trying to switching to onnxruntime instead, if appropriate models are available.
-
 ############################################################
 OFFLINE TRIGGER COUNT (Peak-picking)
 Dir            : data\neg_wavs
@@ -28,8 +26,6 @@ hop_ms         : 40.0
 chunk_samples  : 1280
 Global maxscore: 0.806666
 ############################################################
-
-WARNING:root:Tried to import the tflite runtime, but it was not found. Trying to switching to onnxruntime instead, if appropriate models are available.
 
 ############################################################
 OFFLINE TRIGGER COUNT (Peak-picking)

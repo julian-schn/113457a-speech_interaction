@@ -95,6 +95,8 @@ or in a sweep for different threshholds results:
    python .\app-offline.py --mode offline --audio_dir data\neg_wavs --model_path .\models\hey_mycroft_v0.1.onnx --threshold $t --release_ratio 0.9 --hop_ms 40 --capture_seconds 0
    }
 
+   -> for doc: https://picovoice.ai/blog/benchmarking-a-wake-word-detection-engine/
+
 
 
 >>
