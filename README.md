@@ -82,3 +82,21 @@ If `--transcribe_url` is set, each saved snippet is sent to the whisper.cpp REST
 4. After each trigger, the captured `.wav` is uploaded to the Whisper server via `requests` (multipart `file=` payload) and the returned text is printed.
 
 Use these hooks to integrate downstream actions, collect training data, or experiment with other wakeword models.
+
+## Offline Evaluation (FAR)
+
+run app-offline with this command and change data folder to check different materials:
+
+   python app-offline.py --mode offline --audio_dir data\neg_wavs --model_path .\models\hey_mycroft_v0.1.onnx --threshold 0.5 --release_ratio 0.9 --hop_ms 40 --capture_seconds 0
+
+or in a sweep for different threshholds results:
+
+   foreach ($t in 0.1, 0.5, 0.8) {
+   python .\app-offline.py --mode offline --audio_dir data\neg_wavs --model_path .\models\hey_mycroft_v0.1.onnx --threshold $t --release_ratio 0.9 --hop_ms 40 --capture_seconds 0
+   }
+
+   -> for doc: https://picovoice.ai/blog/benchmarking-a-wake-word-detection-engine/
+
+
+
+>>
