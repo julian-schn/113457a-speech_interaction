@@ -1,31 +1,130 @@
+# === Node.js ===
 node_modules/
-
-# VitePress build artifacts and caches.
-**/.vitepress/cache/
-**/.vitepress/dist/
-
-# Build output
-dist/
-
-# Environment files
-.env
-.env.*
-
-# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# System files
-.DS_Store
-Thumbs.db
+# === Python ===
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
 
-# IDE/editor folders
-.vscode/
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
 
-# Optional: coverage output
-coverage/
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Wakeword recordings
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Environments
+.env
+.env.*
+
+# === Machine Learning / Audio ===
+# Large model files (ONNX, PyTorch, TensorFlow)
+*.onnx
+*.onnx.json
+*.pth
+*.pt
+*.h5
+*.pb
+*.tflite
+*.ckpt
+
+# Audio files (except documentation examples if needed)
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+
+# Recordings and captures
+recordings/
+captures/
 code/basic-wakeword detection/recordings/
+
+# === VitePress ===
+**/.vitepress/cache/
+**/.vitepress/dist/
+
+# === Build output ===
+dist/
+
+# === System files ===
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# === IDE/Editor ===
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.vs/
+
+# === Logs ===
+logs/
+*.log
+
+# === Optional: coverage output ===
+coverage/
