@@ -1,0 +1,4 @@
+openwakeword
+numpy
+pyaudio
+requests
