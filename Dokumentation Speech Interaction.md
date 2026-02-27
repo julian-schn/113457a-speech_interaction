@@ -1,85 +1,63 @@
-# 
+# Speech Interaction: Dokumentation
+## Wake Word Detection – “How Do You Wanna Do This?”
 
-# ![][image1]
-
-# 
-
-# Speech Interaction
-
-# Dokumentation
-
-# 
-
-# Wake Word Detection
-
-#  
-
-# **“How Do You Wanna Do This?”**
-
-# 
-
-# Julian Schniepp
-
-Daniel Kling  
-Martin Herdt
+**Authors:** Julian Schniepp, Daniel Kling, Martin Herdt
 
 # Inhaltsverzeichnis
 
-[**Projektidee	3**](#projektidee)
+[Projektidee](#projektidee)
 
-[**Wake Word Training	3**](#wake-word-training)
+[Wake Word Training](#wake-word-training)
 
-[Positive Testdaten	6](#positive-testdaten)
+[Positive Testdaten](#positive-testdaten)
 
-[Negative Testdaten	7](#negative-testdaten)
+[Negative Testdaten](#negative-testdaten)
 
-[**Offline Pipeline	8**](#offline-pipeline)
+[Offline Pipeline](#offline-pipeline)
 
-[Methodik Evaluierung	8](#methodik-evaluierung)
+[Methodik Evaluierung](#methodik-evaluierung)
 
-[Technischer Ablauf der Auswertung	8](#technischer-ablauf-der-auswertung)
+[Technischer Ablauf der Auswertung](#technischer-ablauf-der-auswertung)
 
-[**Metriken und Validierungsgrundlage	9**](#metriken-und-validierungsgrundlage)
+[Metriken und Validierungsgrundlage](#metriken-und-validierungsgrundlage)
 
-[**Code und Notebooks	9**](#code-und-notebooks)
+[Code und Notebooks](#code-und-notebooks)
 
-[**Ergebnisse	11**](#ergebnisse)
+[Ergebnisse](#ergebnisse)
 
-[**Diskussion	15**](#diskussion)
+[Diskussion](#diskussion)
 
-[**“Hey Mycroft” Wake Word im Vergleich	15**](#“hey-mycroft”-wake-word-im-vergleich)
+[“Hey Mycroft” Wake Word im Vergleich](#“hey-mycroft”-wake-word-im-vergleich)
 
-[**Deutung	15**](#deutung)
+[Deutung](#deutung)
 
-[Mehrwortige Wake Words erleichtern Erkennung durch Timing-Komponente	15](#mehrwortige-wake-words-erleichtern-erkennung-durch-timing-komponente)
+[Mehrwortige Wake Words erleichtern Erkennung durch Timing-Komponente](#mehrwortige-wake-words-erleichtern-erkennung-durch-timing-komponente)
 
-[Effektivität ist nicht linear zusammenhängend	16](#effektivität-ist-nicht-linear-zusammenhängend)
+[Effektivität ist nicht linear zusammenhängend](#effektivität-ist-nicht-linear-zusammenhängend)
 
-[Hoher Phoneme-Kontrast erleichtert Erkennung (Plosive, Konsonantengrenzen, Frikative)	17](#hoher-phoneme-kontrast-erleichtert-erkennung-\(plosive,-konsonantengrenzen,-frikative\))
+[Hoher Phoneme-Kontrast erleichtert Erkennung (Plosive, Konsonantengrenzen, Frikative)](#hoher-phoneme-kontrast-erleichtert-erkennung-(plosive,-konsonantengrenzen,-frikative))
 
-[Mehr Daten \== Besser, bei wenigen Daten ist Wake Word Wahl wichtig (Phonetik, Entropie)	17](#mehr-daten-==-besser,-bei-wenigen-daten-ist-wake-word-wahl-wichtig-\(phonetik,-entropie\))
+[Mehr Daten == Besser, bei wenigen Daten ist Wake Word Wahl wichtig (Phonetik, Entropie)](#mehr-daten-==-besser,-bei-wenigen-daten-ist-wake-word-wahl-wichtig-(phonetik,-entropie))
 
-[Layer Size kann Overfitting bewirken	18](#layer-size-kann-overfitting-bewirken)
+[Layer Size kann Overfitting bewirken](#layer-size-kann-overfitting-bewirken)
 
-[**Anwendung	20**](#heading=h.5eju7jiu87ge)
+[Anwendung](#heading=h.5eju7jiu87ge)
 
-[Implementierung der „MercerAI“ Android-Applikation	20](#implementierung-der-„mercerai“-android-applikation)
+[Implementierung der „MercerAI“ Android-Applikation](#implementierung-der-„mercerai“-android-applikation)
 
-[**Zusammenfassung	23**](#zusammenfassung)
+[Zusammenfassung](#zusammenfassung)
 
-[**Reflexion	23**](#reflexion)
+[Reflexion](#reflexion)
 
-[**Ausblick	23**](#ausblick)
+[Ausblick](#ausblick)
 
-[**Quellen	24**](#quellen)
+[Quellen](#quellen)
 
-# **Projektidee**  {#projektidee}
+# Projektidee
 
 „How do you want to do this?“ ist eine Anspielung auf die populären Dungeons & Dragons-Kampagnen von *Critical Role (Critical Role Wiki, o. D.)*. Der Satz markiert den Moment, in dem ein Spieler den finalen Schlag gegen einen Gegner kreativ beschreiben darf. Für unser Projekt bietet dies zwei wesentliche Vorteile: Erstens einen konkreten, spielnahen Anwendungsfall und zweitens ein technisch anspruchsvolles, aber charakteristisches Wake Word.
 
-# 
-
-# **Wake Word Training** {#wake-word-training}
+# Wake Word Training
 
 Aus technischer Sicht weist „How do you wanna do this?“ Merkmale auf, die sie deutlich von Standard-Wake Words (wie “Alexa” oder “OK Google”) abheben. Besonders relevant sind die hohe Silbenzahl, die Verwendung der umgangssprachlichen Form „wanna“, das markante prosodische Profil sowie die allgemeine Distinktivität. Diese Aspekte werden in den folgenden Abschnitten genauer beleuchtet.
 
@@ -116,7 +94,7 @@ Der Haupthebel zur Steuerung der FRR/FAR-Balance (False Rejection vs. False Acce
 
 Das trainierte Modell basiert auf einem einfachen vollverbundenen neuronalen Netz (DNN). Als Eingabe dienen Speech Embeddings der Form (16 × 96), erzeugt durch das vorgelagerte, vortrainierte Embedding-Modell. Die 16 Zeitfenster mit je 96 Embedding-Dimensionen repräsentieren., 16 Frames mit je 96 Mel-Frequenzbändern, das zunächst auf einen Vektor der Länge 1.536 geflacht wird. Dieser wird durch drei lineare Schichten verarbeitet, zwischen denen jeweils eine LayerNorm-Normalisierung und eine ReLU-Aktivierungsfunktion eingesetzt werden. Die Ausgabe ist ein einzelner Wahrscheinlichkeitswert (Sigmoid) zwischen 0 und 1, der angibt, ob das Wake Word erkannt wurde. Bei einer Layer Size von 96 ergibt sich eine finale Modellgröße von ca. 650 KB im ONNX-Format, was den Einsatz auf ressourcenbeschränkten Geräten wie Mobiltelefonen ermöglicht. Dies entspricht quasi der gleichen Architektur, die in dem offiziellen OpenWake Word Repository vorgegeben wird.Erstellung der Testdaten
 
-## Positive Testdaten {#positive-testdaten}
+## Positive Testdaten
 
 Zur Erstellung vieler Testdaten hat es sich angeboten, ein eigenes Jupyter-Notebook zu erstellen. Dieses sollte viele positive Testdaten mit passender Augmentation erstellen können.  
 Hierzu bietet sich Kokoro TTS an. Dies war uns schon bekannt für seine hohe Leistungsfähigkeit auch bei Inferenz auf handelsüblichen Computern. Kokoro bietet einige Vorteile wie die Anpassungsfähigkeit der Stimmen durch verschiedene Parameter. Wir haben dabei hauptsächlich folgende Parameter zufallsgesteuert eingesetzt: Sprechgeschwindigkeit und Voice Blending, womit sich quasi eine unendliche Anzahl von Stimmen ergibt.  
@@ -134,34 +112,30 @@ Die Pipeline augmentiert zufällig Audiodaten mittels folgender Methoden:
 Die Stärke, in der die Effekte und deren Parameter angewendet werden, werden per Zufall in einem voreingestellten Intervall festgelegt.  
 Dieser Ansatz erlaubt es uns eine Vielzahl einzigartiger Testdaten komplett automatisch zu generieren, die nicht mit PiperTTS generiert wurden. Durch die Seed-basierte Generation und JSON Manifest sind die Ergebnisse komplett nachvollziehbar und reproduzierbar.
 
-## 
-
-## Negative Testdaten {#negative-testdaten}
+## Negative Testdaten
 
 Neben den positiven Testdaten war auch ein negativer Datensatz Bestandteil für die Evaluierung und den Vergleich der trainierten Wake Words. Ziel war es, eine realistische Klangkulisse zu schaffen, um die Widerstandsfähigkeit der Modelle gegenüber Fehlaktivierungen (False Acceptances) zu prüfen.
 
 Die Erzeugung dieser Daten erfolgte automatisiert über ein entwickeltes Python-Skript. Dabei wurden zwei wesentliche Komponenten kombiniert:
 
 * **Sprachanteil:** Als Basis dienten zufällige Textpassagen aus dem **LibriSpeech-Datensatz** (Random Text) (Panayotov, 2015).  
-* **Störgeräusche:** Um eine natürliche Umgebung zu simulieren, wurden Hintergrundgeräusche aus dem DEMAND-Datensatz (Noise) (Thiemann, 2013\) beigemischt.
+* **Störgeräusche:** Um eine natürliche Umgebung zu simulieren, wurden Hintergrundgeräusche aus dem DEMAND-Datensatz (Noise) (Thiemann, 2013) beigemischt.
 
 Um eine konsistente Audioqualität sicherzustellen, orientiert sich die Erstellung des negativen Datensatzes an der Benchmarking-Methodik von Picovoice (2020). Die technische Umsetzung erfolgte in drei zentralen Schritten:
 
 * **Akustische Varianz:** Für jedes Sprachsegment wurde ein zufälliger Startpunkt innerhalb der längeren Noise-Dateien gewählt, um eine hohe Vielfalt zu erzielen.  
 * **Pegelanpassung:** Mittels RMS-Normierung (Root Mean Square) wurde ein festes Signal-Rausch-Verhältnis (SNR) von 10 dB eingestellt.  
-* **Clippingschutz:** Um digitale Übersteuerungen durch die Signaladdition zu verhindern, wurde der Spitzenpegel des finalen Mixes automatisch auf \-0,2 dB begrenzt.
+* **Clippingschutz:** Um digitale Übersteuerungen durch die Signaladdition zu verhindern, wurde der Spitzenpegel des finalen Mixes automatisch auf -0,2 dB begrenzt.
 
 Das Ergebnis ist ein Datensatz von 5 Stunden Laufzeit, exportiert im 16-Bit-PCM-WAV-Format. Dieser stellt eine Mischung aus zufälliger Sprache und Hintergrundrauschen dar und bietet somit eine passende Grundlage für den Vergleich der Wake Word-Modelle.
 
-# 
+# Offline Pipeline
 
-# **Offline Pipeline** {#offline-pipeline}
-
-## Methodik Evaluierung {#methodik-evaluierung}
+## Methodik Evaluierung
 
 Um die Leistungsfähigkeit der trainierten Modelle objektiv zu bewerten, wurde die bestehende Applikation (`app.py`) um einen Offline-Modus erweitert (`app-offline.py)`. Dieser ermöglichte es, große Datenmengen automatisiert zu analysieren, ohne die Tests in Echtzeit durchführen zu müssen.
 
-## Technischer Ablauf der Auswertung {#technischer-ablauf-der-auswertung}
+## Technischer Ablauf der Auswertung
 
 Der Offline-Modus scannt ein definiertes Verzeichnis und bereitet jede Audiodatei durch eine Normalisierung auf 16 kHz (Mono) vor. Die eigentliche Detektionslogik spiegelt dabei exakt das Verhalten der Online-Anwendung wider, um die Vergleichbarkeit mit dem späteren Live-Betrieb zu gewährleisten:
 
@@ -169,16 +143,14 @@ Der Offline-Modus scannt ein definiertes Verzeichnis und bereitet jede Audiodate
 * **PeakPicker & Release:** Zur Detektion der Trigger wird ein PeakPicker-Algorithmus eingesetzt. Der implementierte Release-Wert sorgt dafür, dass das System nach einem erkannten Trigger für eine definierte Zeit gesperrt wird, um Mehrfachauslösungen desselben Ereignisses zu verhindern.  
 * **Threshold-Sweep:** Um die Empfindlichkeit der Modelle zu ermitteln, wurde ein systematischer „Sweep“ über verschiedene Schwellenwerte durchgeführt. Die Untersuchung startete bei einem Threshold von 0.05 und wurde in inkrementellen Schritten von 0.05 bis zu einem Maximum von 0.95 gesteigert. Dieser granulare Ansatz erlaubt es, die gesamte Wahrscheinlichkeitsspanne des Modells abzudecken.
 
-# 
-
-# **Metriken und Validierungsgrundlage** {#metriken-und-validierungsgrundlage}
+# Metriken und Validierungsgrundlage
 
 Die Qualität der Wake Word-Erkennung wurde anhand zweier zentraler Metriken auf Basis der zuvor erstellten Datensätze bestimmt:
 
 * **False Rejection Rate (FRR):** Zur Ermittlung der fälschlichen Abweisungen wurden 300 spezifische positive Samples verwendet. Die FRR gibt an, wie oft das System das tatsächliche Wake Word nicht erkannt hat.  
 * **False Acceptance Rate (FAR):** Die Bewertung der Fehlaktivierungen erfolgte über den generierten negativen Datensatz (5 Stunden Laufzeit). Hierbei wurde gemessen, wie häufig das System fälschlicherweise einen Trigger auslöst, obwohl das Wake Word nicht gesprochen wurde.
 
-# **Code und Notebooks** {#code-und-notebooks}
+# Code und Notebooks
 
 In unserem Projekt haben wir einiges an selbst erstellten und bereits vorhandenen Notebooks verwendet, folgend ist eine Übersicht über das Wesentliche
 
@@ -191,9 +163,7 @@ In unserem Projekt haben wir einiges an selbst erstellten und bereits vorhandene
 | Allgemeines Repository der Vorlesung | Erste Implementationen für den Pi, ELIZA | [Github Repository](https://github.com/julian-schn/113457a-speech_interaction) |  |
 | MercerAI | Demo Android App mit Wake Word Erkennung, funktional in DnD Spielen | [Github Repository](https://github.com/daniwokl97/Mercer) |  |
 
-# 
-
-# **Ergebnisse** {#ergebnisse}
+# Ergebnisse
 
 Die abschließende Analyse der trainierten Modelle erfolgte durch eine Gegenüberstellung der False Rejection Rate (FRR) und der False Acceptance Rate (FAR). Diese Metriken erlauben eine fundierte Aussage über die Balance zwischen Bedienbarkeit (Erkennungsrate) und Störfestigkeit (Vermeidung von Fehlalarmen).
 
@@ -225,11 +195,9 @@ Die vorliegende DET-Kurve (Detection Error Tradeoff) dient zur Evaluation der Mo
 * **Kurvencharakteristik:** Das Modell "How\_S" weist einen markanten, fast vertikalen Verlauf auf. Während die Fehlaktivierungen nahezu konstant niedrig bleiben (nahe der 0,2 FA/h-Marke), variiert die FRR in diesem Bereich massiv zwischen 40 % und 85 %.  
 * **Langformen:** Die Kurven von "How\_M" und "How\_L" sind deutlich nach oben (Richtung hoher FRR) verschoben. Beide Modelle erreichen erst bei Fehlaktivierungsraten oberhalb von 1,0 FA/h eine FRR von unter 70 %, was sie im direkten Vergleich zur Referenz und zur Kurzform schlechter positioniert.
 
-# 
+# Diskussion
 
-# **Diskussion** {#diskussion}
-
-## “Hey Mycroft” Wake Word im Vergleich {#“hey-mycroft”-wake-word-im-vergleich}
+## “Hey Mycroft” Wake Word im Vergleich
 
 OpenWakeWord bietet das vortrainierte Modell “Hey Mycroft” an, das wir im Vergleich für das Benchmarking verwendet haben. Hierbei handelt es sich nicht um einen fairen Vergleich, da das Mycroft Modell signifikant größere Trainingsdaten verwendet hat. Die Architektur ist die Gleiche, die folgenden Layers sind nennenswert verschieden
 
@@ -245,31 +213,31 @@ OpenWakeWord bietet das vortrainierte Modell “Hey Mycroft” an, das wir im Ve
 
 Trotz maßgeblicher Ungleichheit liefert der Vergleich wertvolle Erkenntnisse: Hey Mycroft demonstriert, was mit deutlich mehr Trainingsdaten und einem akustisch prägnanten Zweisilber erreichbar ist. Unsere Modelle bleiben in FRR und FAR klar dahinter zurück. Dies ist jedoch weniger ein Versagen der Architektur als ein erwartbares Ergebnis der geringeren Datenmenge und der höheren phonetischen Komplexität unserer Zielphrase. Der Vergleich dient daher weniger als absolute Leistungsmessung, sondern als Referenzpunkt zur Einordnung der Ergebnisse. 
 
-## Deutung {#deutung}
+## Deutung
 
-### Mehrwortige Wake Words erleichtern Erkennung durch Timing-Komponente {#mehrwortige-wake-words-erleichtern-erkennung-durch-timing-komponente}
+### Mehrwortige Wake Words erleichtern Erkennung durch Timing-Komponente
 
 Unsere Ergebnisse zeigen, dass How\_L trotz höherer FRR bei niedrigen Thresholds eine vergleichbar gute FAR wie Hey Mycroft erreicht. Diese niedrige FAR ist jedoch kritisch zu betrachten: Da How\_L 79–100% aller Audios ablehnt, werden zwangsläufig auch Fehlaktivierungen unterdrückt, ein Artefakt der schlechten Erkennungsrate, nicht ein Beweis für den Vorteil zeitlichen Kontexts. Mehrwortige Wake Words (z.B. „Hey Siri“, „OK Google“) haben in der Praxis oft Erkennungs­vorteile gegenüber Einwort‑Triggern, weil sie länger dauern, mehr zeitlichen Kontext liefern und damit Verwechslungen mit Spontansprache reduzieren. Die längere akustische Dauer und charakteristische Betonungs‑ bzw. Silbenmuster dieser Phrasen machen sie als akustische Sequenz seltener und besser von Hintergrundsprache und ähnlichen Wörtern zu trennen, was vor allem die False‑Alarm‑Rate senkt. Keyword‑Spotting‑Übersichtsarbeiten und Praxisberichte zu Wake‑Word‑Systemen beschreiben, dass kurze Phrasen oder mehrsilbige Wörter dem Modell erlauben, die Entscheidung über mehrere Frames und ggf. sogar etwas Audio nach der Phrase zu mitteln, was die Robustheit gegenüber Rauschen, Sprecher‑Variabilität und Timing‑Unschärfen verbessert (Chen et al.,2014). Gleichzeitig gilt aber als gut etabliert, dass Designfragen wie phonotaktische Auffälligkeit, Seltenheit im Alltagsdiskurs, klare Konsonanten‑Vokale‑Kontraste und genügend Trainingsdaten oft wichtiger sind als der bloße Unterschied „ein Wort vs. mehrere Wörter“, d.h. schlecht gestaltete Mehrwort‑Phrasen können trotz längerer Dauer weiterhin zu häufigen Fehlaktivierungen führen
 
-### Effektivität ist nicht linear zusammenhängend {#effektivität-ist-nicht-linear-zusammenhängend}
+### Effektivität ist nicht linear zusammenhängend
 
 In unseren Messungen zeigt sich dieser nichtlineare Zusammenhang deutlich: How\_M (6 Silben) schneidet in der DET-Kurve über weite Strecken schlechter ab als sowohl How\_S (4 Silben) als auch How\_L (7 Silben), eine moderate Verlängerung brachte hier keinen Vorteil, sondern die schlechteste FAR aller drei Varianten. Die Forschung zu Keyword Spotting und Wake Words legt nahe, dass der Zusammenhang zwischen Trigger‑Länge und Erkennungsleistung deutlich nichtlinear ist: Sehr kurze Keywords (ein bis zwei Silben) neigen zu erhöhten False‑Accept‑Raten, weil ihre akustischen Muster oft mit Alltagswörtern und Hintergrundsprache kollidieren, während eine moderate Verlängerung (mehrsilbige Wörter bzw. kurze Phrasen wie „Hey Siri“, „OK Google“) typischerweise klar messbare Verbesserungen bei Detektionsgenauigkeit und Robustheit gegenüber Sprecher‑Variabilität und Ausspracheunterschieden bringt  (van Leeuwen et al., 1999). Jenseits dieser moderaten Länge zeigen Studien jedoch ausgeprägte „diminishing returns“: Zusätzliche Silben oder Wörter liefern kaum noch diskriminative Information, erhöhen aber die Wahrscheinlichkeit verkürzter oder variierter Realisierungen durch Nutzer, was die False‑Reject‑Rate steigen lassen kann und die Modelle stärker belastet. In der Literatur wird daher ein Designkorridor empfohlen, in dem das Wake Word lang und phonetisch reichhaltig genug ist, um sich klar von Spontansprache abzusetzen, aber kurz genug bleibt, damit Sprecher es konsistent aussprechen können und die Modellkapazität nicht auf unnötig lange Sequenzen verteilt wird. Jenseits dieses Korridors überwiegen typischerweise Bedienbarkeits‑ und Robustheitsprobleme gegenüber weiteren Erkennungsgewinnen (López-Espejo et al., 2022).
 
-### Hoher Phoneme-Kontrast erleichtert Erkennung (Plosive, Konsonantengrenzen, Frikative) {#hoher-phoneme-kontrast-erleichtert-erkennung-(plosive,-konsonantengrenzen,-frikative)}
+### Hoher Phoneme-Kontrast erleichtert Erkennung (Plosive, Konsonantengrenzen, Frikative)
 
-Der Leistungsvorsprung von Hey Mycroft über alle Thresholds lässt sich nicht allein auf die größere Trainingsdatenmenge zurückführen: Die harte Konsonantenfolge in „croft" bietet eine akustische Prägnanz, die unsere Phrasen mit dem vokalreichen „wanna" und weichen Endlauten so nicht aufweisen. In der Wake‑Word‑ und Keyword‑Spotting‑Literatur gilt als relativ gut etabliert, dass ein hoher phonemischer Kontrast und deutlich segmentierte Konsonanten–Vokal‑Strukturen die Erkennbarkeit verbessern, weil sie das akustische Signal klarer von Hintergrundsprache und ähnlich klingenden Wörtern absetzen und so sowohl Detektionsgenauigkeit erhöhen als auch False‑Reject‑Raten senken. Harte Konsonanten wie Plosive (z.B. „k", „t", „p") und Frikative (z.B. „s", „f") (Wang et al., 2024\) erzeugen im Audiosignal klare, markante Muster, die ein Modell leichter erkennt. Rein vokalreiche Sequenzen sind dagegen anfälliger für Verschleifung, je nach Sprecher, Dialekt oder Sprechtempo klingen sie schnell ähnlich. Daher empfiehlt es sich, Wake Words mit deutlichen Konsonanten und klarer Silbenstruktur zu wählen. Ein universelles Rezept gibt es allerdings nicht, da die optimale Lautgestalt immer auch vom Modell und den Trainingsdaten abhängt.
+Der Leistungsvorsprung von Hey Mycroft über alle Thresholds lässt sich nicht allein auf die größere Trainingsdatenmenge zurückführen: Die harte Konsonantenfolge in „croft" bietet eine akustische Prägnanz, die unsere Phrasen mit dem vokalreichen „wanna" und weichen Endlauten so nicht aufweisen. In der Wake‑Word‑ und Keyword‑Spotting‑Literatur gilt als relativ gut etabliert, dass ein hoher phonemischer Kontrast und deutlich segmentierte Konsonanten–Vokal‑Strukturen die Erkennbarkeit verbessern, weil sie das akustische Signal klarer von Hintergrundsprache und ähnlich klingenden Wörtern absetzen und so sowohl Detektionsgenauigkeit erhöhen als auch False‑Reject‑Raten senken. Harte Konsonanten wie Plosive (z.B. „k", „t", „p") und Frikative (z.B. „s", „f") (Wang et al., 2024) erzeugen im Audiosignal klare, markante Muster, die ein Modell leichter erkennt. Rein vokalreiche Sequenzen sind dagegen anfälliger für Verschleifung, je nach Sprecher, Dialekt oder Sprechtempo klingen sie schnell ähnlich. Daher empfiehlt es sich, Wake Words mit deutlichen Konsonanten und klarer Silbenstruktur zu wählen. Ein universelles Rezept gibt es allerdings nicht, da die optimale Lautgestalt immer auch vom Modell und den Trainingsdaten abhängt.
 
-### Mehr Daten \== Besser, bei wenigen Daten ist Wake Word Wahl wichtig (Phonetik, Entropie) {#mehr-daten-==-besser,-bei-wenigen-daten-ist-wake-word-wahl-wichtig-(phonetik,-entropie)}
+### Mehr Daten == Besser, bei wenigen Daten ist Wake Word Wahl wichtig (Phonetik, Entropie)
 
 Mit nur 30.000 positiven Samples gegenüber \~100.000 bei Hey Mycroft sind unsere Modelle ein direktes Beispiel für ein Low-Resource-Szenario, die deutlich höheren FRR-Werte von How\_L und How\_M legen nahe, dass die phonetische Komplexität unserer Phrasen bei dieser Datenmenge nicht ausreichend abgedeckt werden konnte. In der Wake‑Word‑Forschung gilt als gut etabliert, dass mehr und vielfältige Trainingsdaten die Erkennungsleistung meist deutlich verbessern (Jia et al., 2020): Mit wachsendem Datenvolumen sinken Fehler­raten (False Rejects und False Accepts), weil das Modell mehr Sprecher, Umgebungen und Aussprachevarianten abdeckt und dadurch robuster generalisiert. Gerade bei kleinen Datensätzen zeigt sich jedoch, dass die intrinsische „Erkennbarkeit“ der Zielphrase (also ihre phonetische Auffälligkeit, klare Segmentstruktur und hohe akustische Informationsdichte) überproportional wichtig wird, weil das Modell weniger Gelegenheit hat, systematische Ambiguitäten oder ungünstige Lautmuster aus den Daten herauszulernen. Studien zu „limited training data“ und user‑definierten Keywords berichten, dass in Low‑Resource‑Szenarien deutlich häufiger auf Datenaugmentation, synthetische Daten und explizit phonetisch günstige Keywords zurückgegriffen werden muss (Jia et al., 2020); andernfalls steigen insbesondere die False‑Reject‑Raten stark an, während bei reichlich Trainingsdaten die konkrete Lautgestalt des Keywords zwar weiterhin relevant bleibt, aber ein Teil der Defizite durch schiere Datenmenge kompensiert werden kann. Dieser Ressourcenmangel erklärt auch, warum die Erkennungsrate von How\_L bereits bei mittleren Schwellenwerten (Threshold \> 0,8) fast vollständig einbricht. Bei einer 7-silbigen Phrase müssen alle akustischen Teilsegmente die Schranke passieren; statistisch gesehen sinkt die Wahrscheinlichkeit für eine solche ‚perfekte Kette‘ bei strengen Grenzwerten gegen Null, wenn das Modell aufgrund der geringen Datenmenge keine ausreichende Konfidenz für die gesamte Sequenz entwickeln konnte.
 
-### Layer Size kann Overfitting bewirken {#layer-size-kann-overfitting-bewirken}
+### Layer Size kann Overfitting bewirken
 
 Die Modelle zeigen im Threshold-Sweep teils instabile Kurvenverläufe, die auf mangelnde Generalisierung hindeuten. Als Hauptursache ist weniger die Layer Size von 96 zu sehen, sondern vielmehr die Kombination aus einer sehr hohen False Activation Penalty (2.000) und der geringen Sprachvarianz der rein synthetischen PiperTTS-Trainingsdaten: Die Verlustfunktion trainiert das Modell extrem aggressiv gegen Fehlaktivierungen, während die Synthetik-Daten die natürliche Varianz menschlicher Stimmen nur begrenzt abdecken. In der Forschung zu neuronalen Netzen, insbesondere bei Low-Data-Szenarien, ist es ein gut etabliertes Prinzip, dass Modelle mit zu hoher Kapazität (z. B. zu viele Schichten oder Parameter relativ zur Trainingsdatenmenge) stark zum Overfitting neigen: Sie merken Trainingsbeispiele auswendig, anstatt generalisierbare Muster zu lernen, was zu hohen Trainingsgenauigkeiten, aber schlechter Generalisierung auf neuen Daten führt. Dies tritt besonders bei kleinen Datensätzen auf, da die Modellkomplexität die Datenvielfalt übersteigt und Rauschen oder Ausreißer priorisiert werden; kleinere, einfachere Modelle sind hier robuster und erzwingen komprimierte Repräsentationen mit besserer Vorhersagekraft. Als grobe Daumenregel gilt in der Praxis ein Verhältnis von etwa 10–100 Trainingsbeispielen pro Parameter (je nach Aufgabe und Regularisierung), wobei speziell in embedded KWS- und Small-Footprint-Forschung (z. B. für mobile Keyword-Spotting) Modelle mit \<1 Mio. Parametern für begrenzte Daten priorisiert werden, um Overfitting zu vermeiden – oft kombiniert mit Dropout, Data Augmentation oder Transfer Learning. Ein deutliches Indiz für diese Überoptimierung ist die markante Steilheit der DET-Kurve bei How\_S. Der fast vertikale Verlauf zeigt, dass die Fehlaktivierungen zwar extrem niedrig bleiben, die Erkennungsrate (FRR) aber bei minimaler Erhöhung des Thresholds sofort massiv einbricht. Das Modell hat eine ‚starre' Entscheidungsgrenze gelernt, die zwar effektiv vor Fehlalarmen schützt, aber kaum Spielraum für natürliche Aussprachevariationen lässt
 
-# **Anwendung**
+# Anwendung
 
-## Implementierung der „MercerAI“ Android-Applikation {#implementierung-der-„mercerai“-android-applikation}
+## Implementierung der „MercerAI“ Android-Applikation
 
 Die mobile Applikation „MercerAI“ ([https://github.com/daniwokl97/Mercer](https://github.com/daniwokl97/Mercer)) dient als sprachgesteuerter Kampf-Assistent für das Rollenspiel Dungeons & Dragons. Sie ermöglicht es, kreative Kampfchoreografien durch Spracheingabe zu erkennen und diese unmittelbar akustisch zu untermalen.
 
@@ -302,9 +270,9 @@ Die akustische Umsetzung erfolgt über die FMOD Audio Engine, die zur Minimierun
 * **Dynamisches Sound-Management:** Das C++ Script steuert über FMOD-Busse das Echtzeit-Ducking und den Wechsel zwischen Umgebungs- und Kampfszenarien. Nach Abschluss der Kampfhandlungen stellt das System automatisch den Normalzustand wieder her und aktiviert die Wake Word-Engine erneut.
 
  ![][image5]  
-Screenshot von MercerAI \- Work in Progress
+Screenshot von MercerAI - Work in Progress
 
-# **Zusammenfassung** {#zusammenfassung}
+# Zusammenfassung
 
 Im Rahmen dieses Projekts wurde mit „MercerAI“ ein funktionaler Prototyp eines sprachgesteuerten Dungeons & Dragons-Kampfassistenten entwickelt. Der Kern des Systems liegt in der Implementierung eines benutzerdefinierten Wake Words („How do you want to do this?“), das in drei Längenvariationen (How\_L, How\_M, How\_S) trainiert und evaluiert wurde.
 
@@ -312,11 +280,11 @@ Durch den Einsatz einer rein synthetischen Trainingspipeline (PiperTTS) und eine
 
 Die Ergebnisse verdeutlichen das Spannungsfeld zwischen Phrasenlänge und Erkennungsrate: Während die Kurzform How\_S eine beeindruckende Störfestigkeit gegenüber Fehlaktivierungen (FAR) aufweist, führt die phonetische Komplexität der Langform How\_L zu einer sehr hohen Ablehnungsrate (FRR). 
 
-# **Reflexion** {#reflexion}
+# Reflexion
 
-Konkrete Schritte, die wir bei zukünftiger Weiterarbeit vornehmen würden, beziehen sich primär auf das Training bei der Layer Size und der Anzahl der Ebenen selbst. Angesichts unserer begrenzten Trainingsdatenmenge wäre ein erster naheliegender Schritt, mit kleineren Layer Sizes (z.B. 32 oder 64\) zu experimentieren, um Overfitting gezielt zu reduzieren. Gleichzeitig haben wir während des Projekts gemerkt, dass wir die Architektur weitgehend als gegeben hingenommen haben, hier würden wir beim nächsten Mal bewusst Zeit einplanen, um alternative Ansätze zu recherchieren und zu evaluieren, beispielsweise CNN-basierte oder attention-basierte Modelle, die auch für Keyword Spotting diskutiert werden. Das einfache DNN hat für den Einstieg gut funktioniert, aber wir sind gespannt, ob andere Architekturen unsere spezifische Herausforderung, ein langes, phonetisch variables Wake Word mit wenig Trainingsdaten, besser lösen könnten.
+Konkrete Schritte, die wir bei zukünftiger Weiterarbeit vornehmen würden, beziehen sich primär auf das Training bei der Layer Size und der Anzahl der Ebenen selbst. Angesichts unserer begrenzten Trainingsdatenmenge wäre ein erster naheliegender Schritt, mit kleineren Layer Sizes (z.B. 32 oder 64) zu experimentieren, um Overfitting gezielt zu reduzieren. Gleichzeitig haben wir während des Projekts gemerkt, dass wir die Architektur weitgehend als gegeben hingenommen haben, hier würden wir beim nächsten Mal bewusst Zeit einplanen, um alternative Ansätze zu recherchieren und zu evaluieren, beispielsweise CNN-basierte oder attention-basierte Modelle, die auch für Keyword Spotting diskutiert werden. Das einfache DNN hat für den Einstieg gut funktioniert, aber wir sind gespannt, ob andere Architekturen unsere spezifische Herausforderung, ein langes, phonetisch variables Wake Word mit wenig Trainingsdaten, besser lösen könnten.
 
-# **Ausblick** {#ausblick}
+# Ausblick
 
 Das Projekt bietet verschiedene Anknüpfungspunkte für zukünftige Optimierungen und Erweiterungen:
 
@@ -324,7 +292,7 @@ Das Projekt bietet verschiedene Anknüpfungspunkte für zukünftige Optimierunge
 * **Feinjustierung der Modellkapazität:** Um das beobachtete Overfitting bei kleinen Datensätzen zu minimieren, könnten Experimente mit reduzierten Layer Sizes oder verstärkten Regularisierungstechniken (wie Dropout) durchgeführt werden. Ziel ist eine stabilere DET-Kurve, die weniger sensibel auf Threshold-Schwankungen reagiert.  
 * **UX-Studie im Tabletop-Szenario:** Ein entscheidender nächster Schritt ist die Durchführung einer empirischen Nutzerstudie direkt am Spieltisch. Hierbei soll untersucht werden, wie sich die Sprachsteuerung auf den Spielfluss und die Immersion auswirkt. Zentrale Fragen sind hierbei: Wird das Wake Word als natürliche Interaktion empfunden oder stört es die narrative Dynamik? Wie reagieren Spieler auf das akustische Feedback in einer realen Geräuschkulisse?
 
-# **Quellen** {#quellen}
+# Quellen
 
 Chen, G., Parada, C., & Heigold, G. (2014). Small-footprint keyword spotting using deep neural networks. *2014 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)*, 4087–4091. [https://doi.org/10.1109/ICASSP.2014.6854370](https://doi.org/10.1109/ICASSP.2014.6854370)
 
